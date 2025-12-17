@@ -66,6 +66,8 @@
 | Рендеринг комнат | ✅ | Цвет по типу, границы |
 | Отображение имени комнаты | ✅ | Text в центре |
 | Отображение иконки типа | ✅ | Emoji в углу |
+| Круглые комнаты (shape: circle) | ❌ | radius property |
+| Shape Subtract mode (вырезание ниш) | ❌ | Boolean operations для сложных форм |
 
 ### 2.3 Выделение и редактирование
 | Задача | Статус | Примечания |
@@ -93,6 +95,14 @@
 | Система портов | ✅ | N/E/S/W, fixed/sliding |
 | Waypoints (locked/auto) | ✅ | Типы и логика |
 | Line Jumps | ✅ | arc/gap/sharp стили |
+| Straightness/wander параметр | ❌ | Контроль прямолинейности (связан с bendPenalty) |
+
+### 2.5 Внутренние стены и перегородки
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Wall Tool (внутренние стены) | ❌ | Перегородки внутри комнат |
+| Wall styles (solid/dashed/dotted) | ❌ | Для secret barriers |
+| Standalone walls (вне комнат) | ❌ | Для открытых зон |
 
 ---
 
@@ -209,7 +219,43 @@
 | IntersectionPolicy | ✅ | avoid/junction/lineJump |
 | CorridorRouterSettings | ✅ | Настройки движка |
 
-### 6.3 Переходники
+### 6.3 Coalesce (слияние) коридоров
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Типы CoalesceSettings | ✅ | corridorTypes.ts |
+| TypeMergePolicy / LayerMergePolicy | ✅ | corridorTypes.ts |
+| NormalizedSegment и хеширование | ✅ | corridorTypes.ts |
+| Алгоритм канонизации сегментов | ❌ | corridorCoalesce.ts |
+| Дедупликация сегментов | ❌ | corridorCoalesce.ts |
+| Обнаружение частичного перекрытия | ❌ | corridorCoalesce.ts |
+| Создание junction при слиянии | ❌ | corridorCoalesce.ts |
+| A* prefer-reuse интеграция | ❌ | corridorRouter.ts |
+| UI toggle в GenerationPanel | ❌ | GenerationPanel.tsx |
+| Unit тесты coalesce | ❌ | |
+
+### 6.4 Routing Intelligence (расширенный A*)
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| RoutingCostConfig типы | ✅ | corridorTypes.ts |
+| CrossingPolicy типы | ✅ | corridorTypes.ts |
+| JunctionRules типы | ✅ | corridorTypes.ts |
+| TTRPGRoutingConstraints типы | ✅ | corridorTypes.ts |
+| DebugOverlayOptions типы | ✅ | corridorTypes.ts |
+| StyleProfileId / RoutingStyleProfile | ✅ | corridorTypes.ts |
+| REALISM_PROFILE / FUTURISM_PROFILE | ✅ | corridorTypes.ts |
+| Cost function в A* | ❌ | corridorRouter.ts |
+| Junction split алгоритм | ❌ | corridorPostProcess.ts |
+| Junction merge/relax | ❌ | corridorPostProcess.ts |
+| Simplify pass | ❌ | corridorPostProcess.ts |
+| Beautify pass (ортогонализация) | ❌ | corridorPostProcess.ts |
+| TTRPG метрики расчёт | ❌ | ttrpgMetrics.ts |
+| Валидация нелинейности | ❌ | ttrpgMetrics.ts |
+| Primary spine / Secondary connectors | ❌ | generator.ts |
+| Redundancy pass (петли) | ❌ | generator.ts |
+| UI: Routing секция в GenerationPanel | ❌ | GenerationPanel.tsx |
+| Debug overlay рендеринг | ❌ | MapCanvas.tsx |
+
+### 6.5 Переходники
 | Задача | Статус | Примечания |
 |--------|--------|------------|
 | Шлюзы между разными типами | ⚠️ | Типы определены |
@@ -220,13 +266,19 @@
 
 ## Фаза 7: Слои и аннотации
 
-### 7.1 Система слоёв
+### 7.1 Обязательные слои
 | Задача | Статус | Примечания |
 |--------|--------|------------|
 | Определение слоёв (Layer type) | ✅ | В types.ts |
+| Architecture layer (комнаты/коридоры/стены) | ⚠️ | Неявно существует |
+| Props/Icons layer | ❌ | Отдельно от архитектуры |
+| Labels/Text layer | ❌ | Аннотации |
+| Overlays layer | ❌ | Fog, grid, debug |
 | UI переключения слоёв | ❌ | |
 | Скрытие/показ слоёв | ❌ | |
 | Блокировка слоёв | ❌ | |
+| Solo layer (показать только один) | ❌ | |
+| Props layer не мешает архитектуре | ❌ | Отдельный selection/visibility |
 
 ### 7.2 Вентиляция и коммуникации
 | Задача | Статус | Примечания |
@@ -721,6 +773,120 @@
 
 ---
 
+## Фаза 21: Mothership-Inspired Features
+
+> Источник: Mothership Map Viewer / Map Creator. Спецификация: `docs/specs/MOTHERSHIP_FEATURES_SPEC.md`
+
+### 21.1 Расширенная геометрия комнат
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Круглые комнаты (shape: circle) | ❌ | radius property |
+| Internal walls внутри комнаты | ❌ | InternalWall[] |
+| Wall styles (solid/dashed/dotted) | ❌ | Для secret barriers |
+| Standalone walls | ❌ | Вне комнат |
+| Standalone labels | ❌ | Аннотации вне помещений |
+
+### 21.2 Corridor Endpoints & Snapping
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| EndpointMarkerType | ✅ | none/door/grate/airlock/hatch/bulkhead/locked |
+| Snap коридора к грани комнаты | ⚠️ | WallAttachment |
+| Visual feedback при hover над гранью | ❌ | |
+| Endpoint marker влияет на семантику | ❌ | isGate, blocksMovement |
+| None = бесшовное соединение | ❌ | Визуально сливает сегменты |
+
+### 21.3 Маркеры (TTRPG-семантика)
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| MarkerType enum (18 типов) | ✅ | markerTypes.ts |
+| Marker entity | ✅ | id, type, pos, label, isSecret |
+| MARKER_TYPE_CONFIGS | ✅ | icon, color, category |
+| Инструмент Marker placement | ❌ | |
+| Nested markers (в комнате) | ❌ | parentId, parentType |
+| Standalone markers | ❌ | |
+| Marker visibility | ❌ | Отдельно от parent |
+
+### 21.4 Visibility & Secrets Model
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| VisibilityState type | ✅ | visible/hidden/fog/revealed |
+| GMViewMode | ✅ | player/gm/secrets |
+| DefaultVisibilitySettings | ✅ | visibilityTypes.ts |
+| VisibilityInheritanceRules | ✅ | roomRevealsMarkers: false (критично!) |
+| Room visibility НЕ раскрывает markers | ❌ | Реализация |
+| Secret passages (isSecret flag) | ❌ | |
+| SecretPassageConfig | ✅ | discoveryMethod, DC |
+| GM view toggle | ❌ | |
+| Fog of war settings | ✅ | FogOfWarSettings |
+| Visibility presets | ✅ | exploration/tactical/planning |
+
+### 21.5 UI структура (Mothership patterns)
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Context toolbar (по выделению) | ❌ | ContextToolbar.tsx |
+| Info panel (подсказки по инструменту) | ⚠️ | Есть в StatusBar |
+| Item details panel (inspector) | ✅ | RightPanel |
+| Quick navigation dropdown | ❌ | Go to room/marker/corridor |
+| Floating toolbars | ⚠️ | Есть Toolbar слева |
+
+### 21.6 Persistence & Sharing
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| JSON export (full project) | ✅ | |
+| JSON import | ✅ | |
+| Share string (gzip + base64) | ❌ | SFM1: prefix |
+| Autosave to localStorage | ✅ | |
+| Recovery on page load | ❌ | Dialog с предложением восстановить |
+| Max backups limit | ❌ | 5 по умолчанию |
+
+### 21.7 Клавиатурные сокращения (дополнительные)
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Ctrl+C / Ctrl+V copy/paste | ✅ | |
+| Ctrl+A select all | ❌ | |
+| Reset View кнопка | ❌ | Центр/масштаб по умолчанию |
+
+---
+
+## Фаза 22: Geomorph режим (v2)
+
+> Сборка станции/корабля из модулей с возможностью замены отдельных тайлов.
+
+### 22.1 Базовая система тайлов
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Geomorph tile type | ❌ | Модуль + порты для соединения |
+| Tile grid editor | ❌ | Сетка для размещения тайлов |
+| Port matching rules | ❌ | Порты должны совпадать при соединении |
+| Tile rotation (0/90/180/270) | ❌ | |
+| Tile flip (horizontal/vertical) | ❌ | |
+
+### 22.2 Библиотека тайлов
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Built-in geomorph library | ❌ | Базовые модули |
+| Custom tile creation | ❌ | Сохранить выделение как тайл |
+| Tile categories | ❌ | corner/edge/center/connector |
+| Tile preview thumbnails | ❌ | |
+| Import/export tile packs | ❌ | |
+
+### 22.3 Генерация из тайлов
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Auto-generate from tiles | ❌ | Случайная сборка с правилами |
+| Swap single tile (reroll) | ❌ | Заменить один модуль без полного реролла |
+| Constraint solving | ❌ | WFC-like алгоритм |
+| Seed для тайловой генерации | ❌ | |
+
+### 22.4 Валидация (опционально)
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Port connectivity check | ❌ | Все порты соединены? |
+| Island detection | ❌ | Есть изолированные зоны? |
+| ~~Running tally (масса/энергия)~~ | ❌ | Отложено — overengineering |
+
+---
+
 ## Статистика прогресса
 
 ### По фазам:
@@ -746,6 +912,8 @@
 | 18. UI/QOL Доступность/перформанс | 25% |
 | 19. UI/QOL Инспектор/тулбары | 50% |
 | 20. UI/QOL Режимы/Views | 30% |
+| 21. Mothership Features | 25% |
+| 22. Geomorph режим | 0% |
 
 ### Общий прогресс: ~45%
 

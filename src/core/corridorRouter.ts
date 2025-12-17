@@ -37,6 +37,8 @@ interface AStarNode {
   parent: AStarNode | null
   direction: 'H' | 'V' | null // Horizontal or Vertical approach
   turnCount: number
+  crossingCount: number       // Number of corridor crossings
+  reuseCount: number          // Number of reused segments
 }
 
 // ============================================================================
@@ -188,9 +190,14 @@ export class CorridorRouter {
       parent: null,
       direction: null,
       turnCount: 0,
+      crossingCount: 0,
+      reuseCount: 0,
     }
     
     openSet.push(startNode)
+    
+    // Get cost config
+    const costs = this.settings.costs
     
     const directions: Array<{ dx: number; dy: number; dir: 'H' | 'V' }> = [
       { dx: 0, dy: -1, dir: 'V' }, // Up
@@ -238,14 +245,40 @@ export class CorridorRouter {
         const worldPos = toWorld(nx, ny)
         if (this.isBlocked(worldPos, padding)) continue
         
-        // Calculate cost
+        // Calculate advanced cost using RoutingCostConfig
         const isTurn = current.direction !== null && current.direction !== dir.dir
-        const turnCost = isTurn ? this.settings.turnPenalty : 0
-        const moveCost = 1
         
-        const g = current.g + moveCost + turnCost
-        const h = this.heuristic({ x: nx, y: ny }, gridEnd)
+        // Base move cost (distance based)
+        const moveCost = costs.lengthCost * cellSize
+        
+        // Bend penalty (for turns)
+        const bendCost = isTurn ? costs.bendPenalty : 0
+        
+        // Near-miss penalty (close to room walls)
+        const nearMissCost = this.getNearMissPenalty(worldPos, costs.nearMissDistance, costs.nearMissPenalty)
+        
+        // Crossing penalty (intersecting existing corridors)
+        const { crossingCost, isCrossing } = this.getCrossingPenalty(
+          worldPos, 
+          current.direction, 
+          dir.dir,
+          costs.crossingPenalty,
+          costs.crossingPolicy
+        )
+        
+        // Reuse bonus (if on existing corridor path)
+        const { reuseBonus, isReuse } = costs.preferReuseEnabled
+          ? this.getReuseBonus(worldPos, costs.reuseBonus, costs.reuseBonusStrength)
+          : { reuseBonus: 0, isReuse: false }
+        
+        // Total g cost
+        const g = current.g + moveCost + bendCost + nearMissCost + crossingCost + reuseBonus
+        const h = this.heuristic({ x: nx, y: ny }, gridEnd) * costs.lengthCost * cellSize
         const f = g + h
+        
+        // Track crossing and reuse counts
+        const newCrossingCount = current.crossingCount + (isCrossing ? 1 : 0)
+        const newReuseCount = current.reuseCount + (isReuse ? 1 : 0)
         
         // Check if in open set with better score
         const existing = openSet.find(n => n.x === nx && n.y === ny)
@@ -256,6 +289,8 @@ export class CorridorRouter {
             existing.parent = current
             existing.direction = dir.dir
             existing.turnCount = current.turnCount + (isTurn ? 1 : 0)
+            existing.crossingCount = newCrossingCount
+            existing.reuseCount = newReuseCount
           }
         } else {
           openSet.push({
@@ -267,6 +302,8 @@ export class CorridorRouter {
             parent: current,
             direction: dir.dir,
             turnCount: current.turnCount + (isTurn ? 1 : 0),
+            crossingCount: newCrossingCount,
+            reuseCount: newReuseCount,
           })
         }
       }
@@ -360,6 +397,137 @@ export class CorridorRouter {
     return false
   }
   
+  /**
+   * Calculate near-miss penalty for being close to room walls
+   */
+  private getNearMissPenalty(point: Point, nearMissDistance: number, penaltyValue: number): number {
+    let minDist = Infinity
+    
+    for (const room of this.rooms) {
+      const { x, y, width, height } = room.bounds
+      
+      // Distance to each edge
+      const distLeft = Math.abs(point.x - x)
+      const distRight = Math.abs(point.x - (x + width))
+      const distTop = Math.abs(point.y - y)
+      const distBottom = Math.abs(point.y - (y + height))
+      
+      // Only count if within x/y range of the room
+      if (point.y >= y && point.y <= y + height) {
+        minDist = Math.min(minDist, distLeft, distRight)
+      }
+      if (point.x >= x && point.x <= x + width) {
+        minDist = Math.min(minDist, distTop, distBottom)
+      }
+    }
+    
+    if (minDist < nearMissDistance) {
+      // Linear falloff: closer = higher penalty
+      const factor = 1 - (minDist / nearMissDistance)
+      return penaltyValue * factor
+    }
+    
+    return 0
+  }
+  
+  /**
+   * Calculate crossing penalty for intersecting existing corridors
+   */
+  private getCrossingPenalty(
+    point: Point,
+    prevDirection: 'H' | 'V' | null,
+    newDirection: 'H' | 'V',
+    crossingPenalty: number,
+    crossingPolicy: 'forbidden' | 'bridgeJump' | 'allowFreely'
+  ): { crossingCost: number; isCrossing: boolean } {
+    // Check if point is on an existing corridor segment
+    for (const corridor of this.corridors) {
+      for (const segment of corridor.segments) {
+        if (this.isPointOnSegment(point, segment.start, segment.end, this.gridSize / 2)) {
+          // Determine if this is a crossing or parallel
+          const segDir = this.getSegmentDirection(segment.start, segment.end)
+          const isPerpendicular = segDir !== newDirection
+          
+          if (isPerpendicular) {
+            // True crossing
+            switch (crossingPolicy) {
+              case 'forbidden':
+                return { crossingCost: 100000, isCrossing: true } // Effectively blocked
+              case 'bridgeJump':
+                return { crossingCost: crossingPenalty * 0.5, isCrossing: true } // Reduced penalty
+              case 'allowFreely':
+                return { crossingCost: 0, isCrossing: true }
+            }
+          }
+        }
+      }
+    }
+    
+    return { crossingCost: 0, isCrossing: false }
+  }
+  
+  /**
+   * Calculate reuse bonus for following existing corridor paths
+   */
+  private getReuseBonus(
+    point: Point,
+    bonusValue: number,
+    strength: number
+  ): { reuseBonus: number; isReuse: boolean } {
+    // Check if point is on an existing corridor segment
+    for (const corridor of this.corridors) {
+      for (const segment of corridor.segments) {
+        if (this.isPointOnSegment(point, segment.start, segment.end, this.gridSize / 2)) {
+          // Apply bonus (negative cost)
+          return { reuseBonus: bonusValue * strength, isReuse: true }
+        }
+      }
+    }
+    
+    return { reuseBonus: 0, isReuse: false }
+  }
+  
+  /**
+   * Check if a point lies on a line segment
+   */
+  private isPointOnSegment(point: Point, start: Point, end: Point, tolerance: number): boolean {
+    // Check if point is within bounding box of segment + tolerance
+    const minX = Math.min(start.x, end.x) - tolerance
+    const maxX = Math.max(start.x, end.x) + tolerance
+    const minY = Math.min(start.y, end.y) - tolerance
+    const maxY = Math.max(start.y, end.y) + tolerance
+    
+    if (point.x < minX || point.x > maxX || point.y < minY || point.y > maxY) {
+      return false
+    }
+    
+    // Check perpendicular distance to line
+    const dx = end.x - start.x
+    const dy = end.y - start.y
+    const len = Math.sqrt(dx * dx + dy * dy)
+    
+    if (len < 0.001) {
+      // Point segment - just check distance
+      const d = Math.sqrt((point.x - start.x) ** 2 + (point.y - start.y) ** 2)
+      return d <= tolerance
+    }
+    
+    // Cross product gives area of parallelogram, divide by base for height
+    const cross = Math.abs((point.x - start.x) * dy - (point.y - start.y) * dx)
+    const distance = cross / len
+    
+    return distance <= tolerance
+  }
+  
+  /**
+   * Determine if a segment is horizontal or vertical
+   */
+  private getSegmentDirection(start: Point, end: Point): 'H' | 'V' {
+    const dx = Math.abs(end.x - start.x)
+    const dy = Math.abs(end.y - start.y)
+    return dx > dy ? 'H' : 'V'
+  }
+
   /**
    * Reconstruct path from A* result
    */
