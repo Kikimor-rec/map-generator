@@ -1,0 +1,151 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-bg-primary: #080612;
+  --color-bg-secondary: #0f0d24;
+  --color-bg-tertiary: #1e1b4b;
+  --color-accent-primary: #00d4ff;
+  --color-accent-secondary: #00ff9f;
+  --color-text-primary: #e0e8ff;
+  --color-text-secondary: #a5b4fc;
+  --color-border: #4338ca;
+  --color-danger: #ff0080;
+  --color-warning: #ff6600;
+  --grid-size: 32px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent-primary);
+}
+
+/* Custom button styles */
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-md font-medium transition-all duration-200;
+    @apply border border-transparent;
+    @apply focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-space-900;
+  }
+
+  .btn-primary {
+    @apply bg-space-600 text-white hover:bg-space-500;
+    @apply focus:ring-space-500;
+  }
+
+  .btn-secondary {
+    @apply bg-transparent border-space-500 text-space-300;
+    @apply hover:bg-space-800 hover:border-space-400;
+  }
+
+  .btn-cyber {
+    @apply bg-transparent border-cyber-blue text-cyber-blue;
+    @apply hover:bg-cyber-blue hover:bg-opacity-20;
+    @apply shadow-[0_0_10px_rgba(0,212,255,0.3)];
+  }
+
+  .btn-icon {
+    @apply p-2 rounded-md transition-all duration-200;
+    @apply hover:bg-space-800;
+    @apply focus:outline-none focus:ring-2 focus:ring-space-500;
+  }
+
+  .panel {
+    @apply bg-space-900 border border-space-700 rounded-lg;
+    @apply shadow-lg;
+  }
+
+  .panel-header {
+    @apply px-4 py-2 border-b border-space-700;
+    @apply font-display text-sm uppercase tracking-wider text-space-300;
+  }
+
+  .input {
+    @apply w-full px-3 py-2 rounded-md;
+    @apply bg-space-800 border border-space-600;
+    @apply text-space-100 placeholder-space-500;
+    @apply focus:outline-none focus:border-cyber-blue focus:ring-1 focus:ring-cyber-blue;
+    @apply transition-all duration-200;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-space-300 mb-1;
+  }
+
+  .tool-button {
+    @apply w-10 h-10 flex items-center justify-center rounded-md;
+    @apply bg-space-800 border border-space-600;
+    @apply text-space-300 hover:text-cyber-blue hover:border-cyber-blue;
+    @apply transition-all duration-200;
+  }
+
+  .tool-button.active {
+    @apply bg-space-700 border-cyber-blue text-cyber-blue;
+    @apply shadow-[0_0_10px_rgba(0,212,255,0.3)];
+  }
+}
+
+/* Canvas container */
+.canvas-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: var(--color-bg-primary);
+  background-image: 
+    radial-gradient(circle at 25% 25%, rgba(99, 102, 241, 0.05) 0%, transparent 50%),
+    radial-gradient(circle at 75% 75%, rgba(0, 212, 255, 0.05) 0%, transparent 50%);
+}
+
+/* Glow effects */
+.glow-blue {
+  box-shadow: 0 0 20px rgba(0, 212, 255, 0.5);
+}
+
+.glow-green {
+  box-shadow: 0 0 20px rgba(0, 255, 159, 0.5);
+}
+
+/* Animation */
+@keyframes pulse-glow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}

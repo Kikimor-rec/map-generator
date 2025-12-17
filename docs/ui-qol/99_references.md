@@ -1,0 +1,21 @@
+# 99 — References (ориентиры по UX/QOL)
+Дата: 2025-12-17
+- Dungeon Scrawl:
+  - Pricing / core features: https://www.dungeonscrawl.com/pricing
+  - Getting started: https://help.roll20.net/hc/en-us/articles/16979743281943-Getting-Started-with-Dungeon-Scrawl
+  - Pro features (multi-page PDF): https://help.roll20.net/hc/en-us/articles/16981022708247-Dungeon-Scrawl-Pro-Features
+  - Itch page: https://probabletrain.itch.io/dungeon-scrawl
+- Inkarnate — типичные QOL запросы:
+  - Custom layers: https://feedback.inkarnate.com/feature-requests/p/custom-layers
+  - Configure shortcuts: https://feedback.inkarnate.com/feature-requests/p/configure-shortcuts
+  - Object panel commands: https://feedback.inkarnate.com/feature-requests/p/object-panel-commands
+  - Replace feature: https://feedback.inkarnate.com/feature-requests/p/replace-feature
+  - Save group as stamp: https://feedback.inkarnate.com/feature-requests/p/group-20-save-group-as-stamp
+- DungeonFog:
+  - Foundry page: https://www.dungeonfog.com/foundry/
+  - GM Notes (tiptap + grapesjs): https://www.dungeonfog.com/support/tutorials/gm-notes/
+- VTT форматы/импорт:
+  - Dungeondraft (VTT integrations): https://dungeondraft.net/
+  - Foundry Universal Battlemap Importer: https://foundryvtt.com/packages/dd-import/
+  - Roll20 UniversalVTTImporter script: https://app.roll20.net/forum/post/8824428/script-universalvttimporter-import-dd2vtt-files-to-create-dynamic-lighting-lines-and-lights/
+  - Пример door/window семантики: https://app.roll20.net/forum/post/11486629/universalvttimporter-import-problem-all-my-windows-are-doors-request-for-help
