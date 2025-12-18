@@ -140,16 +140,20 @@ export function generateRoomProgram(options: RoomProgramOptions): RoomProgram {
   let roomIndex = 0
   let totalTiles = 0
   
-  // First pass: Add minimum required rooms
+  // First pass: Add core rooms (always required, up to a reasonable limit)
+  const coreRoomsTarget = Math.min(Math.ceil(targetRoomCount * 0.6), targetRoomCount - 2)
   for (const candidate of candidates) {
-    const count = candidate.min
+    if (!candidate.isCore) continue
+    if (rooms.length >= coreRoomsTarget) break
+    
+    const count = Math.min(candidate.min, coreRoomsTarget - rooms.length)
     for (let i = 0; i < count; i++) {
       const room = createProgrammedRoom(
         candidate.roomType,
         roomIndex,
         request,
         rng,
-        candidate.isCore ? 'primary' : undefined
+        'primary'
       )
       if (room) {
         rooms.push(room)
@@ -159,7 +163,28 @@ export function generateRoomProgram(options: RoomProgramOptions): RoomProgram {
     }
   }
   
-  // Second pass: Fill up to target count with optional rooms
+  // Second pass: Add minimum required non-core rooms (but respect target)
+  for (const candidate of candidates) {
+    if (candidate.isCore) continue
+    if (rooms.length >= targetRoomCount) break
+    
+    const count = Math.min(candidate.min, targetRoomCount - rooms.length)
+    for (let i = 0; i < count; i++) {
+      const room = createProgrammedRoom(
+        candidate.roomType,
+        roomIndex,
+        request,
+        rng
+      )
+      if (room) {
+        rooms.push(room)
+        totalTiles += room.estimatedTiles
+        roomIndex++
+      }
+    }
+  }
+  
+  // Third pass: Fill up to target count with optional rooms
   const optionalCandidates = candidates.filter(c => !c.isCore && c.max > c.min)
   
   while (rooms.length < targetRoomCount && totalTiles < targetTileCount * 0.9) {

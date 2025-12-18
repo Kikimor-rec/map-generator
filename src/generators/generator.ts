@@ -36,6 +36,8 @@ import { createRNG } from './rng'
 import { generateRoomProgram, validateRoomProgram } from './roomProgram'
 import { generateTopology, validateTopology } from './topology'
 import { generateLayout, validateLayout } from './layout'
+import { coalesceCorridors } from '@core/corridorCoalesce'
+import { DEFAULT_COALESCE_SETTINGS } from '@core/corridorTypes'
 
 // ============================================================================
 // GENERATOR OPTIONS
@@ -448,6 +450,12 @@ export function convertToEditorFormat(mapJson: MapJSON, deckIndex = 0): EditorMa
     }
   })
   
+  // Apply coalesce to merge overlapping corridor segments
+  const { corridors: coalescedCorridors } = coalesceCorridors(
+    corridors,
+    DEFAULT_COALESCE_SETTINGS
+  )
+  
   // Generate doors at room-corridor connections
   const doors: Door[] = []
   
@@ -481,7 +489,7 @@ export function convertToEditorFormat(mapJson: MapJSON, deckIndex = 0): EditorMa
     }
   }
   
-  return { rooms, corridors, doors }
+  return { rooms, corridors: coalescedCorridors, doors }
 }
 
 function getZoneColor(zone: string, zones: Array<{ id: string; color: string }>): string {

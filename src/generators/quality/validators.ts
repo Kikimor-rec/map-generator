@@ -50,13 +50,14 @@ function rectsOverlap(a: Rect, b: Rect, clearance: number = 0): boolean {
 
 /**
  * Check if a point is inside a rectangle
+ * Uses strict inequality to allow paths along exact boundaries
  */
 function pointInRect(p: Point, r: Rect, inflation: number = 0): boolean {
   return (
-    p.x >= r.x - inflation &&
-    p.x <= r.x + r.width + inflation &&
-    p.y >= r.y - inflation &&
-    p.y <= r.y + r.height + inflation
+    p.x > r.x - inflation &&
+    p.x < r.x + r.width + inflation &&
+    p.y > r.y - inflation &&
+    p.y < r.y + r.height + inflation
   )
 }
 
@@ -213,6 +214,12 @@ export function validateNoCorridorRoomIntersections(
   for (const corridor of corridors) {
     // Get corridor segments
     const path = corridor.path
+    if (!path || path.length < 2) continue
+    
+    // Get connected room IDs to exclude from intersection checks
+    const connectedRoomIds = new Set<string>()
+    if (corridor.fromRoomId) connectedRoomIds.add(corridor.fromRoomId)
+    if (corridor.toRoomId) connectedRoomIds.add(corridor.toRoomId)
     
     for (let i = 0; i < path.length - 1; i++) {
       const seg: Segment = {
@@ -221,6 +228,9 @@ export function validateNoCorridorRoomIntersections(
       }
       
       for (const room of rooms) {
+        // Skip rooms that this corridor connects
+        if (connectedRoomIds.has(room.id)) continue
+        
         const rect: Rect = { x: room.x, y: room.y, width: room.width, height: room.height }
         
         // Check if corridor segment passes through room interior
@@ -341,6 +351,7 @@ export function validateNoExcessiveMicroSegments(
   
   for (const corridor of corridors) {
     const path = corridor.path
+    if (!path || path.length < 2) continue
     
     for (let i = 0; i < path.length - 1; i++) {
       const seg: Segment = { start: path[i], end: path[i + 1] }
@@ -470,11 +481,18 @@ export function validateCandidate(
   checks.RoomsOverlap.failed = roomOverlapErrors.length
   checks.RoomsOverlap.passed = roomOverlapErrors.length === 0 ? 1 : 0
   
+  // Corridor-room intersections: error for high strictness, warning for low
   const corridorRoomErrors = validateNoCorridorRoomIntersections(
     data.placedRooms,
     data.corridors,
     opts.corridorClearance
   )
+  // Downgrade to warnings if strictness is low (draft mode)
+  if (opts.strictness < 0.7) {
+    for (const err of corridorRoomErrors) {
+      err.severity = 'warning'
+    }
+  }
   allErrors.push(...corridorRoomErrors)
   checks.CorridorIntersectsRoom.failed = corridorRoomErrors.length
   checks.CorridorIntersectsRoom.passed = corridorRoomErrors.length === 0 ? 1 : 0

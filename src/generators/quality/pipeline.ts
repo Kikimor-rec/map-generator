@@ -26,6 +26,7 @@ import type {
 import { QUALITY_MODE_CONFIGS, getRoomSizeConfig } from './types'
 import { validateCandidate, type ValidatorOptions } from './validators'
 import { scoreCandidate, calculateJunctionDegreeStats } from './scoring'
+import { buildSegmentGraph, SegmentGraph } from './segmentGraph'
 import { createRNG } from '../rng'
 import type { SeededRNG as RNG } from '../types'
 
@@ -319,7 +320,8 @@ function layoutRooms(
   options: QualityPipelineOptions
 ): PlacedRoom[] {
   const gridSize = options.mapParams.gridSize ?? 40
-  const clearance = options.mapParams.roomClearance ?? 1
+  // Increase clearance to leave room for corridors (at least 5 grid units for corridor + buffer)
+  const clearance = Math.max(5, options.mapParams.roomClearance ?? 5)
   
   const placedRooms: PlacedRoom[] = []
   const occupied: Array<{ x: number; y: number; width: number; height: number }> = []
@@ -433,9 +435,396 @@ function layoutRooms(
 }
 
 // ============================================================================
-// STAGE D: ROUTING
+// STAGE D: ROUTING (with room avoidance)
 // ============================================================================
 
+interface Rect {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+interface Segment {
+  start: { x: number; y: number }
+  end: { x: number; y: number }
+}
+
+/**
+ * Check if a segment intersects a rectangle (room)
+ */
+/**
+ * Check if a segment intersects a rectangle (room)
+ * Uses proper inflation/clearance for padding
+ */
+function segmentIntersectsRoom(seg: Segment, room: PlacedRoom, clearance: number = 1): boolean {
+  // Check if segment passes through room interior with clearance padding
+  const rect: Rect = {
+    x: room.x - clearance,
+    y: room.y - clearance,
+    width: room.width + clearance * 2,
+    height: room.height + clearance * 2,
+  }
+  
+  // Check if either endpoint is strictly inside the rect
+  const startInside = seg.start.x > rect.x && seg.start.x < rect.x + rect.width &&
+                      seg.start.y > rect.y && seg.start.y < rect.y + rect.height
+  const endInside = seg.end.x > rect.x && seg.end.x < rect.x + rect.width &&
+                    seg.end.y > rect.y && seg.end.y < rect.y + rect.height
+  
+  if (startInside || endInside) return true
+  
+  // Check line segment against rectangle edges
+  const edges: Segment[] = [
+    { start: { x: rect.x, y: rect.y }, end: { x: rect.x + rect.width, y: rect.y } },
+    { start: { x: rect.x + rect.width, y: rect.y }, end: { x: rect.x + rect.width, y: rect.y + rect.height } },
+    { start: { x: rect.x, y: rect.y + rect.height }, end: { x: rect.x + rect.width, y: rect.y + rect.height } },
+    { start: { x: rect.x, y: rect.y }, end: { x: rect.x, y: rect.y + rect.height } },
+  ]
+  
+  for (const edge of edges) {
+    if (linesIntersect(seg.start, seg.end, edge.start, edge.end)) {
+      return true
+    }
+  }
+  
+  return false
+}
+
+/**
+ * Check if two line segments intersect
+ */
+function linesIntersect(
+  p1: { x: number; y: number }, p2: { x: number; y: number },
+  p3: { x: number; y: number }, p4: { x: number; y: number }
+): boolean {
+  const d1 = direction(p3, p4, p1)
+  const d2 = direction(p3, p4, p2)
+  const d3 = direction(p1, p2, p3)
+  const d4 = direction(p1, p2, p4)
+  
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+    return true
+  }
+  
+  return false
+}
+
+function direction(a: { x: number; y: number }, b: { x: number; y: number }, c: { x: number; y: number }): number {
+  return (c.x - a.x) * (b.y - a.y) - (b.x - a.x) * (c.y - a.y)
+}
+
+/**
+ * Check if a path intersects any room (except source and target)
+ */
+function pathIntersectsRooms(
+  path: Array<{ x: number; y: number }> | null | undefined,
+  rooms: PlacedRoom[],
+  excludeRoomIds: string[]
+): boolean {
+  if (!path || path.length < 2) return false
+  for (let i = 0; i < path.length - 1; i++) {
+    const seg: Segment = { start: path[i], end: path[i + 1] }
+    
+    for (const room of rooms) {
+      if (excludeRoomIds.includes(room.id)) continue
+      
+      if (segmentIntersectsRoom(seg, room)) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * Try multiple routing strategies and return the first one that doesn't hit rooms
+ */
+function findValidPath(
+  fromPort: PortData,
+  toPort: PortData,
+  fromRoomId: string,
+  toRoomId: string,
+  rooms: PlacedRoom[],
+  gridSize: number,
+  rng: RNG
+): Array<{ x: number; y: number }> | null {
+  const dx = toPort.x - fromPort.x
+  const dy = toPort.y - fromPort.y
+  
+  // Generate multiple candidate paths
+  const candidates: Array<Array<{ x: number; y: number }>> = []
+  
+  // Strategy 1: L-shape (horizontal first)
+  candidates.push([
+    { x: fromPort.x, y: fromPort.y },
+    { x: toPort.x, y: fromPort.y },
+    { x: toPort.x, y: toPort.y },
+  ])
+  
+  // Strategy 2: L-shape (vertical first)
+  candidates.push([
+    { x: fromPort.x, y: fromPort.y },
+    { x: fromPort.x, y: toPort.y },
+    { x: toPort.x, y: toPort.y },
+  ])
+  
+  // Strategy 3: Z-shape (horizontal-vertical-horizontal)
+  const midX = fromPort.x + dx / 2
+  candidates.push([
+    { x: fromPort.x, y: fromPort.y },
+    { x: midX, y: fromPort.y },
+    { x: midX, y: toPort.y },
+    { x: toPort.x, y: toPort.y },
+  ])
+  
+  // Strategy 4: Z-shape (vertical-horizontal-vertical)
+  const midY = fromPort.y + dy / 2
+  candidates.push([
+    { x: fromPort.x, y: fromPort.y },
+    { x: fromPort.x, y: midY },
+    { x: toPort.x, y: midY },
+    { x: toPort.x, y: toPort.y },
+  ])
+  
+  // Strategy 5+: Offset Z-shapes (go around obstacles with various distances)
+  const offsets = [
+    gridSize * 2, -gridSize * 2, 
+    gridSize * 3, -gridSize * 3,
+    gridSize * 4, -gridSize * 4,
+    gridSize * 6, -gridSize * 6,
+    gridSize * 8, -gridSize * 8,
+  ]
+  
+  for (const offset of offsets) {
+    // Go out horizontally first, then vertically
+    candidates.push([
+      { x: fromPort.x, y: fromPort.y },
+      { x: fromPort.x + offset, y: fromPort.y },
+      { x: fromPort.x + offset, y: toPort.y },
+      { x: toPort.x, y: toPort.y },
+    ])
+    
+    // Go out vertically first, then horizontally
+    candidates.push([
+      { x: fromPort.x, y: fromPort.y },
+      { x: fromPort.x, y: fromPort.y + offset },
+      { x: toPort.x, y: fromPort.y + offset },
+      { x: toPort.x, y: toPort.y },
+    ])
+    
+    // Wide U-shape going around (3-segment)
+    candidates.push([
+      { x: fromPort.x, y: fromPort.y },
+      { x: fromPort.x, y: fromPort.y + offset },
+      { x: toPort.x, y: fromPort.y + offset },
+      { x: toPort.x, y: toPort.y },
+    ])
+    
+    candidates.push([
+      { x: fromPort.x, y: fromPort.y },
+      { x: fromPort.x + offset, y: fromPort.y },
+      { x: fromPort.x + offset, y: toPort.y },
+      { x: toPort.x, y: toPort.y },
+    ])
+  }
+  
+  // Shuffle first 4 candidates (basic L/Z shapes) to add variety
+  const basic = candidates.slice(0, 4)
+  const advanced = candidates.slice(4)
+  for (let i = basic.length - 1; i > 0; i--) {
+    const j = rng.randomInt(0, i)
+    const tmp = basic[i]
+    basic[i] = basic[j]
+    basic[j] = tmp
+  }
+  
+  // Try basic shapes first (shorter paths), then advanced (obstacle avoidance)
+  const orderedCandidates = [...basic, ...advanced]
+  
+  // Find first valid path
+  for (const path of orderedCandidates) {
+    if (!pathIntersectsRooms(path, rooms, [fromRoomId, toRoomId])) {
+      return path
+    }
+  }
+  
+  // Fallback: A* pathfinding on a coarse grid
+  const astarPath = findPathAStar(fromPort, toPort, fromRoomId, toRoomId, rooms, gridSize)
+  if (astarPath && !pathIntersectsRooms(astarPath, rooms, [fromRoomId, toRoomId])) {
+    return astarPath
+  }
+  
+  // Last resort: return best L-path even if it intersects (will be caught by validation)
+  return candidates[0]
+}
+
+/**
+ * A* pathfinding on a coarse grid to find paths around rooms
+ */
+function findPathAStar(
+  fromPort: PortData,
+  toPort: PortData,
+  fromRoomId: string,
+  toRoomId: string,
+  rooms: PlacedRoom[],
+  gridSize: number
+): Array<{ x: number; y: number }> | null {
+  const cellSize = gridSize * 2 // Coarse grid for speed
+  
+  // Calculate bounds
+  const allX = rooms.map(r => [r.x, r.x + r.width]).flat().concat([fromPort.x, toPort.x])
+  const allY = rooms.map(r => [r.y, r.y + r.height]).flat().concat([fromPort.y, toPort.y])
+  const minX = Math.min(...allX) - cellSize * 3
+  const maxX = Math.max(...allX) + cellSize * 3
+  const minY = Math.min(...allY) - cellSize * 3
+  const maxY = Math.max(...allY) + cellSize * 3
+  
+  const toGrid = (x: number, y: number) => ({
+    gx: Math.round((x - minX) / cellSize),
+    gy: Math.round((y - minY) / cellSize)
+  })
+  
+  const toWorld = (gx: number, gy: number) => ({
+    x: gx * cellSize + minX,
+    y: gy * cellSize + minY
+  })
+  
+  const start = toGrid(fromPort.x, fromPort.y)
+  const goal = toGrid(toPort.x, toPort.y)
+  
+  // Check if a cell is blocked by any room (except source/target)
+  const isBlocked = (gx: number, gy: number): boolean => {
+    const world = toWorld(gx, gy)
+    for (const room of rooms) {
+      if (room.id === fromRoomId || room.id === toRoomId) continue
+      
+      // Check if point is inside room with generous padding (2x gridSize)
+      const pad = gridSize * 2
+      if (world.x >= room.x - pad && world.x <= room.x + room.width + pad &&
+          world.y >= room.y - pad && world.y <= room.y + room.height + pad) {
+        return true
+      }
+    }
+    return false
+  }
+  
+  interface Node {
+    gx: number
+    gy: number
+    g: number
+    f: number
+    parent: Node | null
+  }
+  
+  const openSet: Node[] = []
+  const closedSet = new Set<string>()
+  
+  const heuristic = (a: { gx: number; gy: number }, b: { gx: number; gy: number }) =>
+    Math.abs(a.gx - b.gx) + Math.abs(a.gy - b.gy)
+  
+  openSet.push({
+    gx: start.gx,
+    gy: start.gy,
+    g: 0,
+    f: heuristic(start, goal),
+    parent: null
+  })
+  
+  const directions = [
+    { dx: 0, dy: -1 }, { dx: 1, dy: 0 },
+    { dx: 0, dy: 1 }, { dx: -1, dy: 0 }
+  ]
+  
+  let iterations = 0
+  const maxIterations = 500
+  
+  while (openSet.length > 0 && iterations < maxIterations) {
+    iterations++
+    
+    openSet.sort((a, b) => a.f - b.f)
+    const current = openSet.shift()!
+    
+    if (current.gx === goal.gx && current.gy === goal.gy) {
+      // Reconstruct path
+      const path: Array<{ x: number; y: number }> = []
+      let node: Node | null = current
+      while (node) {
+        const world = toWorld(node.gx, node.gy)
+        path.unshift(world)
+        node = node.parent
+      }
+      // Replace first and last with exact port positions
+      path[0] = { x: fromPort.x, y: fromPort.y }
+      path[path.length - 1] = { x: toPort.x, y: toPort.y }
+      return simplifyPath(path)
+    }
+    
+    closedSet.add(`${current.gx},${current.gy}`)
+    
+    for (const d of directions) {
+      const ngx = current.gx + d.dx
+      const ngy = current.gy + d.dy
+      const key = `${ngx},${ngy}`
+      
+      if (closedSet.has(key)) continue
+      if (ngx === start.gx && ngy === start.gy) continue // Don't revisit start
+      if (ngx !== goal.gx || ngy !== goal.gy) {
+        if (isBlocked(ngx, ngy)) continue
+      }
+      
+      const g = current.g + 1
+      const f = g + heuristic({ gx: ngx, gy: ngy }, goal)
+      
+      const existing = openSet.find(n => n.gx === ngx && n.gy === ngy)
+      if (existing) {
+        if (g < existing.g) {
+          existing.g = g
+          existing.f = f
+          existing.parent = current
+        }
+      } else {
+        openSet.push({ gx: ngx, gy: ngy, g, f, parent: current })
+      }
+    }
+  }
+  
+  return null // No path found
+}
+
+/**
+ * Remove collinear points from path
+ */
+function simplifyPath(path: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+  if (path.length <= 2) return path
+  
+  const result: Array<{ x: number; y: number }> = [path[0]]
+  
+  for (let i = 1; i < path.length - 1; i++) {
+    const prev = result[result.length - 1]
+    const curr = path[i]
+    const next = path[i + 1]
+    
+    const dx1 = Math.sign(curr.x - prev.x)
+    const dy1 = Math.sign(curr.y - prev.y)
+    const dx2 = Math.sign(next.x - curr.x)
+    const dy2 = Math.sign(next.y - curr.y)
+    
+    if (dx1 !== dx2 || dy1 !== dy2) {
+      result.push(curr)
+    }
+  }
+  
+  result.push(path[path.length - 1])
+  return result
+}
+
+/**
+ * Route corridors using segment-aware pathfinding.
+ * When possible, reuses existing segments to create natural-looking
+ * corridor networks with shared paths.
+ */
 function routeCorridors(
   rng: RNG,
   rooms: PlacedRoom[],
@@ -445,104 +834,131 @@ function routeCorridors(
   const corridors: RoutedCorridor[] = []
   const gridSize = options.mapParams.gridSize ?? 40
   
-  for (const edge of graph) {
+  // Create segment graph for path reuse
+  const segmentGraph = new SegmentGraph(gridSize / 2)
+  
+  // Sort edges to prioritize backbone connections first
+  const sortedEdges = [...graph].sort((a, b) => {
+    // Backbone edges first (they form the trunk)
+    if (a.isBackbone && !b.isBackbone) return -1
+    if (!a.isBackbone && b.isBackbone) return 1
+    return 0
+  })
+  
+  for (const edge of sortedEdges) {
     const fromRoom = rooms.find(r => r.id === edge.fromRoomId)
     const toRoom = rooms.find(r => r.id === edge.toRoomId)
     
     if (!fromRoom || !toRoom) continue
     
-    // Pick closest ports
+    // Try each port combination and find valid path
+    let bestPath: Array<{ x: number; y: number }> | null = null
     let bestFromPort = fromRoom.ports[0]
     let bestToPort = toRoom.ports[0]
-    let bestDist = Infinity
+    let bestLength = Infinity
+    let usedGraphPath = false
     
     for (const fp of fromRoom.ports) {
       for (const tp of toRoom.ports) {
-        const dist = Math.abs(fp.x - tp.x) + Math.abs(fp.y - tp.y)
-        if (dist < bestDist) {
-          bestDist = dist
-          bestFromPort = fp
-          bestToPort = tp
+        // First, try to find path through existing segment graph
+        const graphPath = segmentGraph.findPathThroughGraph(
+          { x: fp.x, y: fp.y },
+          { x: tp.x, y: tp.y },
+          rooms,
+          [fromRoom.id, toRoom.id]
+        )
+        
+        if (graphPath && graphPath.length >= 2) {
+          const length = calculatePathLength(graphPath)
+          if (!pathIntersectsRooms(graphPath, rooms, [fromRoom.id, toRoom.id])) {
+            if (length < bestLength) {
+              bestLength = length
+              bestPath = graphPath
+              bestFromPort = fp
+              bestToPort = tp
+              usedGraphPath = true
+            }
+          }
+        }
+        
+        // Also try regular pathfinding
+        const path = findValidPath(fp, tp, fromRoom.id, toRoom.id, rooms, gridSize, rng)
+        
+        if (path) {
+          const length = calculatePathLength(path)
+          const intersects = pathIntersectsRooms(path, rooms, [fromRoom.id, toRoom.id])
+          
+          if (!intersects && length < bestLength) {
+            bestLength = length
+            bestPath = path
+            bestFromPort = fp
+            bestToPort = tp
+            usedGraphPath = false
+          } else if (!bestPath) {
+            // Keep as fallback
+            bestLength = length
+            bestPath = path
+            bestFromPort = fp
+            bestToPort = tp
+            usedGraphPath = false
+          }
         }
       }
     }
     
-    // Simple orthogonal routing (L-shaped or Z-shaped)
-    const path: Array<{ x: number; y: number }> = []
-    path.push({ x: bestFromPort.x, y: bestFromPort.y })
+    if (!bestPath) continue
     
-    const dx = bestToPort.x - bestFromPort.x
-    const dy = bestToPort.y - bestFromPort.y
+    const corridorId = `corridor-${corridors.length}`
     
-    // Determine routing strategy
-    if (Math.abs(dx) < gridSize) {
-      // Vertical corridor
-      path.push({ x: bestFromPort.x, y: bestToPort.y })
-    } else if (Math.abs(dy) < gridSize) {
-      // Horizontal corridor
-      path.push({ x: bestToPort.x, y: bestFromPort.y })
-    } else {
-      // L or Z shape
-      const useZShape = rng.random() > 0.7 && Math.abs(dx) > gridSize * 2 && Math.abs(dy) > gridSize * 2
-      
-      if (useZShape) {
-        // Z-shape (3 segments)
-        const midX = bestFromPort.x + dx / 2
-        path.push({ x: midX, y: bestFromPort.y })
-        path.push({ x: midX, y: bestToPort.y })
-      } else {
-        // L-shape (2 segments)
-        if (rng.random() > 0.5) {
-          path.push({ x: bestToPort.x, y: bestFromPort.y })
-        } else {
-          path.push({ x: bestFromPort.x, y: bestToPort.y })
-        }
-      }
-    }
-    
-    path.push({ x: bestToPort.x, y: bestToPort.y })
+    // Add path to segment graph for future reuse
+    segmentGraph.addCorridorPath(corridorId, bestPath)
     
     // Calculate bends
     let bends = 0
-    for (let i = 1; i < path.length - 1; i++) {
-      const p0 = path[i - 1]
-      const p1 = path[i]
-      const p2 = path[i + 1]
+    for (let i = 1; i < bestPath.length - 1; i++) {
+      const p0 = bestPath[i - 1]
+      const p1 = bestPath[i]
+      const p2 = bestPath[i + 1]
       
       const d1x = p1.x - p0.x
       const d1y = p1.y - p0.y
       const d2x = p2.x - p1.x
       const d2y = p2.y - p1.y
       
-      // If direction changed, it's a bend
       if ((d1x !== 0 && d2y !== 0) || (d1y !== 0 && d2x !== 0)) {
         bends++
       }
     }
     
-    // Calculate length
-    let length = 0
-    for (let i = 0; i < path.length - 1; i++) {
-      length += Math.abs(path[i + 1].x - path[i].x) + Math.abs(path[i + 1].y - path[i].y)
-    }
-    
     corridors.push({
-      id: `corridor-${corridors.length}`,
+      id: corridorId,
       edgeId: edge.id,
+      fromRoomId: fromRoom.id,
+      toRoomId: toRoom.id,
       fromPortId: bestFromPort.id,
       toPortId: bestToPort.id,
-      path,
-      width: gridSize,
+      path: bestPath,
+      width: Math.floor(gridSize / 2), // Thinner corridors
       bends,
-      length,
+      length: bestLength,
     })
     
-    // Mark ports as connected
     bestFromPort.connectedTo = bestToPort.id
     bestToPort.connectedTo = bestFromPort.id
   }
   
   return corridors
+}
+
+/**
+ * Calculate total path length (Manhattan distance)
+ */
+function calculatePathLength(path: Array<{ x: number; y: number }>): number {
+  let length = 0
+  for (let i = 0; i < path.length - 1; i++) {
+    length += Math.abs(path[i + 1].x - path[i].x) + Math.abs(path[i + 1].y - path[i].y)
+  }
+  return length
 }
 
 // ============================================================================
@@ -552,6 +968,7 @@ function routeCorridors(
 function extractJunctions(corridors: RoutedCorridor[]): JunctionData[] {
   const junctionMap = new Map<string, { x: number; y: number; corridorIds: Set<string> }>()
   
+  // 1. Find junctions at shared path points
   for (const corridor of corridors) {
     for (const point of corridor.path) {
       const key = `${Math.round(point.x)},${Math.round(point.y)}`
@@ -561,6 +978,35 @@ function extractJunctions(corridors: RoutedCorridor[]): JunctionData[] {
       }
       
       junctionMap.get(key)!.corridorIds.add(corridor.id)
+    }
+  }
+  
+  // 2. Find junctions at corridor segment intersections
+  for (let i = 0; i < corridors.length; i++) {
+    for (let j = i + 1; j < corridors.length; j++) {
+      const c1 = corridors[i]
+      const c2 = corridors[j]
+      
+      // Check all segment pairs
+      for (let si = 0; si < c1.path.length - 1; si++) {
+        for (let sj = 0; sj < c2.path.length - 1; sj++) {
+          const intersection = getSegmentIntersection(
+            c1.path[si], c1.path[si + 1],
+            c2.path[sj], c2.path[sj + 1]
+          )
+          
+          if (intersection) {
+            const key = `${Math.round(intersection.x)},${Math.round(intersection.y)}`
+            
+            if (!junctionMap.has(key)) {
+              junctionMap.set(key, { x: intersection.x, y: intersection.y, corridorIds: new Set() })
+            }
+            
+            junctionMap.get(key)!.corridorIds.add(c1.id)
+            junctionMap.get(key)!.corridorIds.add(c2.id)
+          }
+        }
+      }
     }
   }
   
@@ -582,6 +1028,37 @@ function extractJunctions(corridors: RoutedCorridor[]): JunctionData[] {
   return junctions
 }
 
+/**
+ * Get intersection point of two line segments, or null if they don't intersect
+ */
+function getSegmentIntersection(
+  p1: { x: number; y: number }, p2: { x: number; y: number },
+  p3: { x: number; y: number }, p4: { x: number; y: number }
+): { x: number; y: number } | null {
+  const d1x = p2.x - p1.x
+  const d1y = p2.y - p1.y
+  const d2x = p4.x - p3.x
+  const d2y = p4.y - p3.y
+  
+  const cross = d1x * d2y - d1y * d2x
+  
+  // Parallel segments
+  if (Math.abs(cross) < 0.0001) return null
+  
+  const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / cross
+  const u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / cross
+  
+  // Check if intersection is within both segments
+  if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+    return {
+      x: p1.x + t * d1x,
+      y: p1.y + t * d1y
+    }
+  }
+  
+  return null
+}
+
 // ============================================================================
 // STAGE E: POST-PROCESSING
 // ============================================================================
@@ -592,15 +1069,16 @@ function postProcess(
   options: QualityPipelineOptions
 ): CandidateData {
   let { corridors, junctions, ...rest } = data
+  const gridSize = options.mapParams.gridSize ?? 40
   
   // Simplify paths (always for all modes)
   if (config.enableSimplify) {
     corridors = simplifyCorridorPaths(corridors)
   }
   
-  // Coalesce overlapping segments
+  // Coalesce overlapping segments using SegmentGraph
   if (config.enableCoalesce) {
-    const result = coalesceCorridors(corridors)
+    const result = coalesceCorridors(corridors, gridSize)
     corridors = result.corridors
     junctions = [...junctions, ...result.newJunctions]
   }
@@ -612,7 +1090,6 @@ function postProcess(
   
   // Beautify (snap to grid)
   if (config.enableBeautify) {
-    const gridSize = options.mapParams.gridSize ?? 40
     corridors = beautifyCorridors(corridors, gridSize)
   }
   
@@ -740,6 +1217,10 @@ function generateMapData(
 
 function simplifyCorridorPaths(corridors: RoutedCorridor[]): RoutedCorridor[] {
   return corridors.map(c => {
+    if (!c.path || c.path.length < 2) {
+      return c
+    }
+    
     const simplified: Array<{ x: number; y: number }> = [c.path[0]]
     
     for (let i = 1; i < c.path.length - 1; i++) {
@@ -765,12 +1246,24 @@ function simplifyCorridorPaths(corridors: RoutedCorridor[]): RoutedCorridor[] {
   })
 }
 
+/**
+ * Coalesce corridors using segment-based architecture.
+ * Uses SegmentGraph to find shared segments, detect intersections,
+ * and create junctions automatically.
+ */
 function coalesceCorridors(
-  corridors: RoutedCorridor[]
+  corridors: RoutedCorridor[],
+  gridSize: number = 40
 ): { corridors: RoutedCorridor[]; newJunctions: JunctionData[] } {
-  // Simple implementation - just remove duplicate segments
-  // Full implementation would use corridorCoalesce.ts
-  return { corridors, newJunctions: [] }
+  if (corridors.length === 0) {
+    return { corridors: [], newJunctions: [] }
+  }
+
+  // Use SegmentGraph for intelligent coalescing
+  const tolerance = Math.max(5, gridSize / 4)
+  const { updatedCorridors, junctions } = buildSegmentGraph(corridors, tolerance)
+  
+  return { corridors: updatedCorridors, newJunctions: junctions }
 }
 
 function normalizeJunctions(junctions: JunctionData[]): JunctionData[] {
@@ -889,6 +1382,8 @@ export async function runQualityPipeline(
   const minUpdateInterval = options.refinement?.minUpdateInterval ?? 200
   
   // Generate and evaluate candidates
+  let bestInvalidCandidate: GenerationCandidate | null = null
+  
   for (let i = 0; i < config.maxCandidates; i++) {
     // Check abort signal
     if (options.refinement?.abortSignal?.aborted) {
@@ -904,6 +1399,13 @@ export async function runQualityPipeline(
     // Generate candidate
     const candidate = generateCandidate(i, options.seed, options, config)
     allCandidates.push(candidate)
+    
+    // Track best invalid candidate as fallback
+    if (!candidate.isValid) {
+      if (!bestInvalidCandidate || candidate.score > bestInvalidCandidate.score) {
+        bestInvalidCandidate = candidate
+      }
+    }
     
     // Update best if this is better
     if (candidate.isValid && (!bestCandidate || candidate.score > bestCandidate.score)) {
@@ -934,6 +1436,13 @@ export async function runQualityPipeline(
         break
       }
     }
+  }
+  
+  // Fallback to best invalid candidate if no valid ones found
+  if (!bestCandidate && bestInvalidCandidate) {
+    console.warn('[Quality] No valid candidates, using best invalid candidate with errors:', 
+      bestInvalidCandidate.validationErrors.map(e => e.message).join('; '))
+    bestCandidate = bestInvalidCandidate
   }
   
   // Send final update

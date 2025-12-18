@@ -32,7 +32,8 @@ function distance(a: Point, b: Point): number {
   return Math.sqrt(dx * dx + dy * dy)
 }
 
-function pathLength(path: Point[]): number {
+function pathLength(path: Point[] | undefined): number {
+  if (!path || path.length < 2) return 0
   let total = 0
   for (let i = 0; i < path.length - 1; i++) {
     total += distance(path[i], path[i + 1])
@@ -210,6 +211,7 @@ export function calculateReuseRatio(corridors: RoutedCorridor[]): number {
   
   for (const corridor of corridors) {
     const path = corridor.path
+    if (!path || path.length < 2) continue
     
     for (let i = 0; i < path.length - 1; i++) {
       const p1 = path[i]

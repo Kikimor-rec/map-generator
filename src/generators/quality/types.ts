@@ -280,6 +280,32 @@ export interface RoutedCorridor {
   width: number
   bends: number
   length: number
+  /** Segment IDs that make up this corridor (for segment-based architecture) */
+  segmentIds?: string[]
+}
+
+/**
+ * Corridor Segment - basic building block for corridor networks
+ * Each segment is a straight line from one point to another.
+ * Segments can be shared between multiple corridors.
+ */
+export interface CorridorSegment {
+  /** Unique segment ID */
+  id: string
+  /** Start point */
+  from: { x: number; y: number }
+  /** End point */
+  to: { x: number; y: number }
+  /** Segment width */
+  width: number
+  /** IDs of corridors that use this segment */
+  corridorIds: string[]
+  /** Junction at start point (if any) */
+  fromJunctionId?: string
+  /** Junction at end point (if any) */
+  toJunctionId?: string
+  /** Is this a "trunk" segment used by multiple corridors? */
+  isTrunk: boolean
 }
 
 /**
@@ -291,6 +317,8 @@ export interface JunctionData {
   y: number
   degree: number
   corridorIds: string[]
+  /** Segment IDs connected at this junction */
+  segmentIds?: string[]
 }
 
 /**

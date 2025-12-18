@@ -25,8 +25,8 @@ import { createRNG, generateStableId } from './rng'
 // ============================================================================
 
 const GRID_SIZE = 40 // Base grid unit in pixels
-const MIN_ROOM_GAP = 4 // Minimum tiles between rooms (increased for corridor space)
-const CORRIDOR_WIDTH = 0.5 // Width in tiles (narrower corridors)
+const MIN_ROOM_GAP = 3 // Minimum tiles between rooms (enough for corridor)
+const CORRIDOR_WIDTH = 0.4 // Width in tiles (thinner corridors)
 const CORRIDOR_CLEARANCE = 1 // Tiles to keep clear around corridors
 
 // ============================================================================
@@ -105,10 +105,13 @@ function generateDeckLayout(
 ): DeckLayout {
   // Phase 1: Calculate grid bounds based on total room area
   const totalTiles = rooms.reduce((sum, r) => sum + r.estimatedWidth * r.estimatedHeight, 0)
-  const gridDimension = Math.ceil(Math.sqrt(totalTiles * 4)) // More space for corridors and gaps
+  // Use smaller multiplier (2.5) for more compact layout
+  const gridDimension = Math.ceil(Math.sqrt(totalTiles * 2.5))
   
-  const gridWidth = Math.max(30, gridDimension)
-  const gridHeight = Math.max(30, gridDimension)
+  // Minimum size based on number of rooms (smaller for fewer rooms)
+  const minSize = Math.max(15, Math.ceil(rooms.length * 2))
+  const gridWidth = Math.max(minSize, gridDimension)
+  const gridHeight = Math.max(minSize, gridDimension)
   
   // Phase 2: Place rooms using grammar-based placement
   const placedRooms = placeRooms(rooms, connectors, gridWidth, gridHeight, request, rng)
@@ -623,7 +626,12 @@ function findPathWithAStar(
   const gridEnd = toGrid(end)
   
   // Check if a grid cell is blocked by any room
+  // Excludes start and end cells to allow paths from/to ports
   const isBlocked = (gx: number, gy: number): boolean => {
+    // Start and end are never blocked
+    if (gx === gridStart.x && gy === gridStart.y) return false
+    if (gx === gridEnd.x && gy === gridEnd.y) return false
+    
     const worldPoint = toWorld(gx, gy)
     for (const placed of rooms) {
       const rx = placed.rect.x * GRID_SIZE
@@ -741,7 +749,6 @@ function findPathWithAStar(
   }
   
   // Fallback to L-shaped path if A* fails
-  console.warn('A* failed, using fallback L-path')
   return generateFallbackLPath(start, end, rooms)
 }
 
