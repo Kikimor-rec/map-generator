@@ -1,186 +1,31 @@
-# Архитектура системы коридоров
+# Corridor System (Updated)
 
-## Обзор
+This file replaces the broken legacy text and describes the current corridor model and routing flow.
 
-Система коридоров обеспечивает создание, редактирование и автоматическую прокладку проходов между комнатами. Реализована согласно спецификации `16_corridor_editor_spec.md`.
+## Core Types
+- **Corridor**: `id`, `segments[]`, optional `segmentIds[]`, `width`, `style`, `connectedRoomIds`, attachments at start/end.
+- **Segment**: `{ start: {x,y}, end: {x,y} }` – always axis-aligned after post-process.
+- **Port** (future-friendly): room-side entry; currently inferred from connector endpoints.
+- **Junction**: created by coalesce/normalizer when 3+ segments meet or when overlaps split.
 
-## Модули
+## Routing Flow (standard generator)
+1. Build inflated obstacle map from room solids + clearance (width-aware).
+2. **Sparse router** attempts an orthogonal path between room ports.
+3. If sparse fails, **grid + JPS fallback** finds a path on an occupancy grid.
+4. Snap + simplify the polyline to grid/tolerance.
+5. **Coalesce** merges overlaps (tolerancePx=10, minSharedLength=20) and inserts junctions.
+6. Convert to editor format; corridors carry `segments` and `segmentIds` for per-segment selection/rendering.
 
-### 1. corridorTypes.ts
+## Quality Pipeline Routing
+- Uses the same sparse router + grid fallback and cost weights (`DEFAULT_ROUTING_COSTS`).
+- Ports limited to the best two candidates per room to reduce clutter.
+- Segments snapped to half-grid for cleaner diagonals if needed; finalized as orthogonal.
 
-Определяет все типы данных для системы коридоров:
+## Editor Notes
+- MapJSON connectors now emit `path`, `waypoints`, `segments`, and `segmentIds` so the canvas can select individual segments.
+- Current UI still selects a whole corridor; segment-level selection remains TODO (see dev plan).
 
-```typescript
-// Виды коридоров
-type CorridorKind = 'corridor' | 'airlock' | 'bulkheadDoor' | 'serviceHatch' | 'verticalLink'
-
-// Слои
-type CorridorLayer = 'main' | 'ventilation' | 'service' | 'cables' | 'security'
-
-// Ширина
-type CorridorWidthClass = 'narrow' | 'standard' | 'wide'
-```
-
-#### Порты (Ports)
-
-Точки подключения коридоров к комнатам:
-
-```typescript
-interface Port {
-  id: string
-  roomId: string
-  side: 'N' | 'E' | 'S' | 'W'
-  mode: 'fixed' | 'sliding'
-  position: number // 0-1
-  connectedCorridorIds: string[]
-}
-```
-
-- **fixed**: Фиксированная позиция на стене
-- **sliding**: Позиция выбирается роутером автоматически
-
-#### Waypoints
-
-Точки изгиба маршрута:
-
-```typescript
-interface Waypoint {
-  x: number
-  y: number
-  kind: 'locked' | 'auto'
-}
-```
-
-- **locked**: Установлено пользователем, сохраняется при перерасчёте
-- **auto**: Вычислено роутером, может измениться
-
-#### Junctions
-
-Перекрёстки коридоров:
-
-```typescript
-interface Junction {
-  id: string
-  pos: Point
-  kind: 'T' | 'X' | 'hub' | 'airlockChamber'
-  rules: JunctionRules
-  connectedCorridorIds: string[]
-}
-```
-
-### 2. corridorRouter.ts
-
-Класс `CorridorRouter` обеспечивает интеллектуальную прокладку маршрутов.
-
-#### Алгоритм A*
-
-```typescript
-class CorridorRouter {
-  // Настройки
-  settings: CorridorRouterSettings
-  
-  // Препятствия
-  rooms: Room[]
-  corridors: Corridor[]
-  
-  // Основной метод роутинга
-  route(request: RouteRequest): RouteResult
-}
-```
-
-#### Особенности алгоритма:
-
-1. **Turn Penalty**: Штраф за повороты для минимизации изгибов
-2. **Stubs**: Короткие сегменты от портов перед роутингом
-3. **Clearance**: Отступ от стен комнат
-4. **Waypoint Support**: Маршрут через заданные точки
-
-#### Настройки роутера:
-
-```typescript
-interface CorridorRouterSettings {
-  gridSnap: boolean        // Привязка к сетке
-  gridSize: number         // Размер ячейки
-  clearanceDefault: number // Отступ от стен
-  stubLength: number       // Длина stub'ов
-  turnPenalty: number      // Штраф за поворот
-  intersectionPolicyDefault: IntersectionPolicy
-  rerouteOnCollision: boolean
-  lineJumpStyle: LineJumpStyle
-}
-```
-
-### 3. corridorPathfinding.ts
-
-Утилитарные функции для работы с путями:
-
-- `findPathAroundRooms()` — базовый A* вокруг комнат
-- `snapToRoomWall()` — привязка к стене комнаты
-- `checkCorridorRoomCollision()` — проверка пересечения
-- `checkCorridorCorridorCollision()` — проверка пересечения коридоров
-- `autoRouteCorridor()` — автоматическая прокладка
-
-## Поток данных
-
-```
-[User Action]
-     │
-     ▼
-[CorridorDrawState]  ←─ UI состояние рисования
-     │
-     ▼
-[CorridorRouter.route()]  ←─ Вычисление пути
-     │
-     ▼
-[RouteResult]  ←─ Путь + waypoints + intersections
-     │
-     ▼
-[Corridor Entity]  ←─ Сохранение в store
-     │
-     ▼
-[MapCanvas Render]  ←─ Отрисовка
-```
-
-## Intersection Policies
-
-### avoid (по умолчанию)
-Маршрут избегает пересечений с другими коридорами.
-
-### junction
-Создаётся перекрёсток (T или X типа) при пересечении.
-
-### lineJump
-Визуальное пересечение без соединения (дуга/пробел/уступ).
-
-## Line Jump стили
-
-| Стиль | Описание |
-|-------|----------|
-| `none` | Без визуализации |
-| `arc` | Дуга над коридором |
-| `gap` | Пробел в линии |
-| `sharp` | Уступ вверх-вниз |
-
-## Интеграция с UI
-
-### MapCanvas.tsx
-
-1. **Рисование**: `CorridorDrawState` с `autoRouteMode`
-2. **Preview**: Живой предпросмотр маршрута
-3. **Editing**: Drag waypoints, добавление новых точек
-
-### События:
-
-- `mousedown` на порте → начало коридора
-- `mousemove` → пересчёт preview
-- `mouseup` на порте → завершение
-- `dblclick` на коридоре → добавить waypoint
-- `drag` waypoint → изменить маршрут
-
-## Будущие улучшения
-
-1. **Визуализация junctions**: Рендеринг T/X перекрёстков
-2. **Line jump рендеринг**: Дуги и пробелы на пересечениях
-3. **Sliding ports**: Автоматический выбор позиции порта
-4. **Parallel routing**: Прокладка нескольких коридоров рядом
-5. **Constraint-based routing**: Маршрут с учётом ограничений (зоны, clearance)
+## Known Issues / TODO
+- Locked waypoints and incremental re-route after moving rooms are not implemented.
+- Crossing policy UI is not surfaced in the panel.
+- Corridor creation still needs tuning for some seeds (tracks in `docs/DEVELOPMENT_PLAN.md`).

@@ -78,6 +78,33 @@ describe('coalesceCorridors', () => {
     expect(result.result.modifiedCorridorIds).toContain('c2')
   })
 
+  it('should respect minSharedLength and skip tiny overlaps', () => {
+    const corridors = [
+      createCorridor('c1', [[p(0, 0), p(100, 0)]]),
+      createCorridor('c2', [[p(90, 0), p(150, 0)]]), // 10px overlap, below default 20
+    ]
+
+    const result = coalesceCorridors(corridors, DEFAULT_COALESCE_SETTINGS)
+
+    expect(result.result.segmentsRemoved).toBe(0)
+    expect(result.corridors[0].segments).toHaveLength(1)
+    expect(result.corridors[1].segments).toHaveLength(1)
+  })
+
+  it('should split and merge partial overlaps above threshold', () => {
+    const corridors = [
+      createCorridor('c1', [[p(0, 0), p(200, 0)]]),
+      createCorridor('c2', [[p(50, 0), p(150, 0)]]), // 100px overlap
+    ]
+
+    const result = coalesceCorridors(corridors, DEFAULT_COALESCE_SETTINGS)
+
+    // Shared span should be merged and reported as modified
+    expect(result.result.modifiedCorridorIds).toEqual(expect.arrayContaining(['c1', 'c2']))
+    // Expect at least one junction created at split points
+    expect(result.result.junctionsCreated).toBeGreaterThanOrEqual(2)
+  })
+
   it('should detect duplicate segments with reversed direction', () => {
     const corridors = [
       createCorridor('c1', [[p(0, 0), p(100, 0)]]),

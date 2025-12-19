@@ -174,6 +174,11 @@ interface MarqueeState {
   currentPoint: Point | null
 }
 
+interface SegmentSelection {
+  corridorId: string
+  segmentIndex: number
+}
+
 export function MapCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
@@ -248,6 +253,8 @@ export function MapCanvas() {
     targetType: null,
     targetId: null,
   })
+  // Segment-level selection (local UI only)
+  const [selectedSegment, setSelectedSegment] = useState<SegmentSelection | null>(null)
 
   const { state, dispatch, activeDeck, rooms, corridors } = useEditor()
   const { 
@@ -263,6 +270,13 @@ export function MapCanvas() {
     selection,
     hoveredId 
   } = state
+
+  // Clear segment selection when switching away from corridor selection
+  useEffect(() => {
+    if (selection.type !== 'corridor' && selection.type !== 'corridor-segment') {
+      setSelectedSegment(null)
+    }
+  }, [selection.type])
 
   // Convert screen coordinates to world coordinates
   const screenToWorld = useCallback((screenX: number, screenY: number) => {
@@ -670,7 +684,11 @@ export function MapCanvas() {
 
     for (const corridor of corridors) {
       const graphics = new Graphics()
-      const isSelected = selection.type === 'corridor' && selection.ids.includes(corridor.id)
+      const isSelected =
+        (selection.type === 'corridor' && selection.ids.includes(corridor.id)) ||
+        (selection.type === 'corridor-segment' && selection.ids.some(id => id.startsWith(`${corridor.id}:`)))
+      const highlightedSegment =
+        selectedSegment && selectedSegment.corridorId === corridor.id ? selectedSegment.segmentIndex : null
       const isHovered = hoveredId === corridor.id
       
       // Draw corridor as a unified path with proper joins
@@ -751,6 +769,20 @@ export function MapCanvas() {
         }
       }
       
+      // Highlight a specific segment if chosen
+      if (highlightedSegment !== null && corridor.segments[highlightedSegment]) {
+        const seg = corridor.segments[highlightedSegment]
+        graphics.lineStyle({
+          width: corridorWidth + 6,
+          color: 0x00ff9f,
+          alpha: 0.8,
+          join: 'round' as any,
+          cap: 'round' as any,
+        })
+        graphics.moveTo(seg.start.x, seg.start.y)
+        graphics.lineTo(seg.end.x, seg.end.y)
+      }
+
       // Make corridor interactive
       graphics.interactive = true
       graphics.cursor = 'pointer'
@@ -764,6 +796,25 @@ export function MapCanvas() {
           
           // Shift+click for multi-select
           const shiftKey = (e.data.originalEvent as unknown as PointerEvent)?.shiftKey
+          const worldPos = screenToWorld(e.global.x, e.global.y)
+
+          // Determine nearest segment to click for highlighting
+          let nearestIndex: number | null = null
+          let nearestDist = Infinity
+          corridor.segments.forEach((seg, idx) => {
+            const dist = pointToSegmentDistance(worldPos, seg.start, seg.end)
+            if (dist < nearestDist) {
+              nearestDist = dist
+              nearestIndex = idx
+            }
+          })
+          const selectThreshold = Math.max((corridor.width || 20) / 2 + 12, 20)
+          if (nearestIndex !== null && nearestDist <= selectThreshold) {
+            setSelectedSegment({ corridorId: corridor.id, segmentIndex: nearestIndex })
+          } else {
+            setSelectedSegment(null)
+          }
+
           if (shiftKey && selection.type === 'corridor') {
             // Toggle selection
             const newIds = selection.ids.includes(corridor.id)
@@ -773,10 +824,9 @@ export function MapCanvas() {
           } else {
             dispatch(actions.select({ type: 'corridor', ids: [corridor.id] }))
           }
-          
+
           // Start dragging corridor (only if not multi-selecting)
           if (!shiftKey) {
-            const worldPos = screenToWorld(e.global.x, e.global.y)
             setCorridorDragState({
               isDragging: true,
               corridorId: corridor.id,
@@ -2008,7 +2058,7 @@ export function MapCanvas() {
           {contextMenu.targetType === 'corridor-point' && contextMenu.targetId && contextMenu.worldPos && (
             <>
               <div className="px-4 py-2 text-xs text-space-400 border-b border-space-600">
-                Точка коридора
+                Corridor point
               </div>
               
               {/* List nearby rooms to attach to */}
@@ -2063,7 +2113,7 @@ export function MapCanvas() {
                     closeContextMenu()
                   }}
                 >
-                  <RoomIcon size={16} /> Прикрепить к: {room.name}
+                  <RoomIcon size={16} /> Attach to: {room.name}
                 </button>
               ))}
               
@@ -2091,7 +2141,7 @@ export function MapCanvas() {
                         closeContextMenu()
                       }}
                     >
-                      <TrashIcon size={16} /> Открепить от комнаты
+                      <TrashIcon size={16} /> Detach from room
                     </button>
                   )
                 }
@@ -2139,7 +2189,7 @@ export function MapCanvas() {
                   closeContextMenu()
                 }}
               >
-                <TrashIcon size={16} /> Удалить точку
+                <TrashIcon size={16} /> Delete point
               </button>
               
               {/* Delete segment option */}
@@ -2179,7 +2229,7 @@ export function MapCanvas() {
                   closeContextMenu()
                 }}
               >
-                <TrashIcon size={16} /> Удалить сегмент
+                <TrashIcon size={16} /> Delete segment
               </button>
               
               {/* Delete corridor option */}
@@ -2193,7 +2243,7 @@ export function MapCanvas() {
                   closeContextMenu()
                 }}
               >
-                <TrashIcon size={16} /> Удалить коридор
+                <TrashIcon size={16} /> Delete corridor
               </button>
             </>
           )}
@@ -2216,26 +2266,26 @@ export function MapCanvas() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-space-800 border border-space-600 rounded-lg shadow-xl p-6 max-w-md">
             <h3 className="text-lg font-semibold text-space-100 mb-2">
-              Пересечение коридоров
+              Corridor intersection
             </h3>
             <p className="text-space-300 mb-4">
-              Новый коридор пересекается с существующим. Хотите создать перекрёсток?
+              New corridor crosses an existing one. Create a junction?
             </p>
             <div className="text-sm text-space-400 mb-4">
-              Обнаружено пересечений: {intersectionDialog.intersectionPoints.length}
+              Intersections found: {intersectionDialog.intersectionPoints.length}
             </div>
             <div className="flex gap-3 justify-end">
               <button
                 className="px-4 py-2 bg-space-700 hover:bg-space-600 text-space-100 rounded-md transition-colors"
                 onClick={() => handleIntersectionConfirm(false)}
               >
-                Отмена
+                Cancel
               </button>
               <button
                 className="px-4 py-2 bg-cyber-600 hover:bg-cyber-500 text-white rounded-md transition-colors"
                 onClick={() => handleIntersectionConfirm(true)}
               >
-                Создать перекрёсток
+                Create junction
               </button>
             </div>
           </div>

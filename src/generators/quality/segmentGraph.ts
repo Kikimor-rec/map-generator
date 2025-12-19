@@ -270,16 +270,34 @@ export class SegmentGraph {
    * Add a corridor path to the graph
    * Returns the segment IDs that make up this corridor
    */
-  addCorridorPath(corridorId: string, path: Point[]): string[] {
-    if (!path || path.length < 2) return []
+  addCorridorPath(
+    corridorId: string,
+    path: Point[]
+  ): { segmentIds: string[]; snappedPath: Point[] } {
+    if (!path || path.length < 2) return { segmentIds: [], snappedPath: [] }
     
     const segmentIds: string[] = []
+    const snappedPath: Point[] = []
     
     for (let i = 0; i < path.length - 1; i++) {
-      const from = path[i]
-      const to = path[i + 1]
+      const from = this.snapPoint(path[i])
+      const to = this.snapPoint(path[i + 1])
       
-      // Check for intersections with existing segments
+      // Track snapped polyline for this corridor (dedupe consecutive duplicates)
+      if (snappedPath.length === 0) {
+        snappedPath.push(from)
+      } else {
+        const last = snappedPath[snappedPath.length - 1]
+        if (last.x !== from.x || last.y !== from.y) {
+          snappedPath.push(from)
+        }
+      }
+      const lastAfter = snappedPath[snappedPath.length - 1]
+      if (lastAfter.x !== to.x || lastAfter.y !== to.y) {
+        snappedPath.push(to)
+      }
+      
+      // Check for intersections with existing segments using snapped endpoints
       const existingSegments = Array.from(this.segments.values())
       
       for (const existing of existingSegments) {
@@ -305,7 +323,7 @@ export class SegmentGraph {
       }
     }
     
-    return segmentIds
+    return { segmentIds, snappedPath }
   }
 
   /**
@@ -405,6 +423,13 @@ export class SegmentGraph {
   }
 
   /**
+   * Get a specific segment by ID
+   */
+  getSegment(id: string): Segment | undefined {
+    return this.segments.get(id)
+  }
+
+  /**
    * Get trunk segments (used by 2+ corridors)
    */
   getTrunkSegments(): Segment[] {
@@ -456,17 +481,37 @@ export function buildSegmentGraph(
   junctions: JunctionData[]
 } {
   const graph = new SegmentGraph(tolerance)
+  const corridorSegmentMap = new Map<string, string[]>()
+  const corridorPathMap = new Map<string, Point[]>()
   
   // Add all corridor paths to the graph
   for (const corridor of corridors) {
     if (corridor.path && corridor.path.length >= 2) {
-      const segmentIds = graph.addCorridorPath(corridor.id, corridor.path)
-      // Could store segmentIds on corridor if needed
+      const { segmentIds, snappedPath } = graph.addCorridorPath(corridor.id, corridor.path)
+      corridorSegmentMap.set(corridor.id, segmentIds)
+      corridorPathMap.set(corridor.id, snappedPath)
     }
   }
-  
-  // Update corridor paths to use shared waypoints
-  const updatedCorridors = graph.updateCorridorPaths(corridors)
+
+  // Rebuild corridor paths to use snapped shared waypoints
+  const updatedCorridors = corridors.map(corridor => {
+    const snappedPath = corridorPathMap.get(corridor.id) || corridor.path || []
+    const segmentIds = corridorSegmentMap.get(corridor.id) || corridor.segmentIds
+    const uniquePath: Point[] = []
+    for (const p of snappedPath) {
+      const last = uniquePath[uniquePath.length - 1]
+      if (!last || last.x !== p.x || last.y !== p.y) {
+        uniquePath.push(p)
+      }
+    }
+    
+    return {
+      ...corridor,
+      path: uniquePath,
+      segmentIds,
+      bends: Math.max(0, uniquePath.length - 2)
+    }
+  })
   
   // Extract junctions
   const junctions = graph.getJunctions()

@@ -604,6 +604,7 @@ export interface Corridor {
   id: string
   style: CorridorStyle
   segments: CorridorSegment[]
+  segmentIds?: string[]
   width: number
   color?: string
   doors: Door[]
@@ -801,7 +802,7 @@ export interface Viewport {
 }
 
 export interface Selection {
-  type: 'room' | 'corridor' | 'object' | 'door' | null
+  type: 'room' | 'corridor' | 'corridor-segment' | 'object' | 'door' | null
   ids: string[]
 }
 

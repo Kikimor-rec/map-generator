@@ -7,35 +7,37 @@
 // Input Parameters (02_input_parameters.md)
 // ============================================================================
 
-export type Archetype = 
-  | 'ship' 
-  | 'station' 
+export type Archetype =
+  | 'ship'
+  | 'station'
   | 'outpost'
+  | 'capital'
+  | 'bunker'
 
-export type ShipSubtype = 
-  | 'courier' 
-  | 'cargo' 
-  | 'research' 
-  | 'military' 
-  | 'salvage' 
+export type ShipSubtype =
+  | 'courier'
+  | 'cargo'
+  | 'research'
+  | 'military'
+  | 'salvage'
   | 'smuggler'
   | 'medical'
   | 'prison'
   | 'colony'
 
-export type StationSubtype = 
-  | 'port' 
-  | 'research' 
-  | 'military' 
-  | 'refinery' 
+export type StationSubtype =
+  | 'port'
+  | 'research'
+  | 'military'
+  | 'refinery'
   | 'habitat'
   | 'listeningPost'
 
-export type OutpostSubtype = 
-  | 'science' 
-  | 'mining' 
-  | 'military' 
-  | 'frontier' 
+export type OutpostSubtype =
+  | 'science'
+  | 'mining'
+  | 'military'
+  | 'frontier'
   | 'ruins'
   | 'blacksite'
 
@@ -61,38 +63,38 @@ export interface GenerationRequest {
   subtype: Subtype
   styleProfile: StyleProfile
   sizeTier: SizeTier
-  
+
   // Geometry & readability
   gridUnit?: number
   boundsHint?: { w: number; h: number }
   symmetry?: number // 0..1
   modularity?: number // 0..1
   readability?: number // 0..1
-  
+
   // Gameplay
   loopiness?: number // 0..1
   secretness?: number // 0..1
   danger?: number // 0..1
   setpieceBias?: number // 0..1
-  
+
   // Decks
   decks?: number | 'auto'
   maxRoomsPerDeck?: number
   verticality?: number // 0..1
-  
+
   // Content control
   roomCountTarget?: number
   includeList?: string[]
   excludeList?: string[]
   mustHaveSetpieces?: string[]
   accessPolicy?: 'soft' | 'strict'
-  
+
   // Hard constraints
   maxCorridorLength?: number
   maxDeadEndRatio?: number
   minAltPathsBetweenCritical?: number
   maxRoomsTotal?: number
-  
+
   // Output
   outputVersion?: string
   debug?: boolean
@@ -143,10 +145,10 @@ export interface ConnectorHint {
 // Topology Graph (04_topology_graph.md)
 // ============================================================================
 
-export type ConnectorKind = 
-  | 'corridor' 
+export type ConnectorKind =
+  | 'corridor'
   | 'door'
-  | 'airlock' 
+  | 'airlock'
   | 'bulkhead'
   | 'serviceHatch'
 
@@ -232,6 +234,14 @@ export interface Junction {
   y: number
   connectorIds: string[]
   type: 'tee' | 'cross' | 'hub'
+}
+
+export interface Socket {
+  id: string;
+  x: number;
+  y: number;
+  direction: 'top' | 'bottom' | 'left' | 'right';
+  width?: number; // Connection width
 }
 
 export interface DeckLayout {

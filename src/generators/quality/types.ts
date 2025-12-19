@@ -192,9 +192,15 @@ export interface MapJSONCompat {
     connectors: Array<{
       id: string
       type: string
+      /** Direct room references (compat with main generator contract) */
+      fromRoomId?: string
+      toRoomId?: string
       fromPort: { roomId: string; portId: string }
       toPort: { roomId: string; portId: string }
-      waypoints: Array<{ x: number; y: number }>
+      /** Corridor path in pixel coordinates */
+      path: Array<{ x: number; y: number }>
+      /** Optional alias for editors expecting waypoints */
+      waypoints?: Array<{ x: number; y: number }>
     }>
     junctions: Array<{
       id: string
@@ -282,6 +288,8 @@ export interface RoutedCorridor {
   length: number
   /** Segment IDs that make up this corridor (for segment-based architecture) */
   segmentIds?: string[]
+  /** Optional explicit segments for editor selection */
+  segments?: Array<{ start: { x: number; y: number }; end: { x: number; y: number } }>
 }
 
 /**

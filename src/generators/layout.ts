@@ -26,8 +26,9 @@ import { createRNG, generateStableId } from './rng'
 
 const GRID_SIZE = 40 // Base grid unit in pixels
 const MIN_ROOM_GAP = 3 // Minimum tiles between rooms (enough for corridor)
-const CORRIDOR_WIDTH = 0.4 // Width in tiles (thinner corridors)
+const CORRIDOR_WIDTH = 1.2 // Width in tiles (match corridor gap)
 const CORRIDOR_CLEARANCE = 1 // Tiles to keep clear around corridors
+const SNAP_STEP = GRID_SIZE / 2
 
 // ============================================================================
 // LAYOUT GENERATOR
@@ -534,8 +535,8 @@ function routeConnectors(
       fromRoomId: connector.fromRoomId,
       toRoomId: connector.toRoomId,
       kind: connector.kind,
-      path,
-      width: CORRIDOR_WIDTH * GRID_SIZE * 0.6
+      path: simplifyPath(path),
+      width: CORRIDOR_WIDTH * GRID_SIZE
     })
   }
   
@@ -577,18 +578,9 @@ function calculateConnectorPath(
   const astarPath = findPathWithAStar(p1, p2, rooms, GRID_SIZE)
   
   // Build final path: from -> p1 -> astarPath -> p2 -> to
-  const path: Point[] = [{ x: from.x, y: from.y }]
-  path.push({ x: p1.x, y: p1.y })
+  const path: Point[] = [{ x: from.x, y: from.y }, { x: p1.x, y: p1.y }, ...astarPath.slice(1, -1), { x: p2.x, y: p2.y }, { x: to.x, y: to.y }]
   
-  // Add A* path points (skip first and last as they are p1 and p2)
-  for (let i = 1; i < astarPath.length - 1; i++) {
-    path.push(astarPath[i])
-  }
-  
-  path.push({ x: p2.x, y: p2.y })
-  path.push({ x: to.x, y: to.y })
-  
-  return path
+  return simplifyPath(path)
 }
 
 // A* pathfinding implementation for corridors
@@ -1035,4 +1027,37 @@ function roomsOverlap(a: LayoutRoom, b: LayoutRoom): boolean {
     a.y + a.height <= b.y ||
     b.y + b.height <= a.y
   )
+}
+
+
+
+
+function simplifyPath(path: Point[]): Point[] {
+  if (!path || path.length <= 2) return path
+
+  const snapped = path.map(p => ({
+    x: Math.round(p.x / SNAP_STEP) * SNAP_STEP,
+    y: Math.round(p.y / SNAP_STEP) * SNAP_STEP
+  }))
+
+  const result: Point[] = [snapped[0]]
+
+  for (let i = 1; i < snapped.length - 1; i++) {
+    const prev = result[result.length - 1]
+    const curr = snapped[i]
+    const next = snapped[i + 1]
+
+    const dx1 = Math.sign(curr.x - prev.x)
+    const dy1 = Math.sign(curr.y - prev.y)
+    const dx2 = Math.sign(next.x - curr.x)
+    const dy2 = Math.sign(next.y - curr.y)
+
+    if (dx1 !== dx2 || dy1 !== dy2) {
+      result.push(curr)
+    }
+  }
+
+  result.push(snapped[snapped.length - 1])
+
+  return result.filter((p, idx, arr) => idx === 0 || p.x !== arr[idx - 1].x || p.y !== arr[idx - 1].y)
 }

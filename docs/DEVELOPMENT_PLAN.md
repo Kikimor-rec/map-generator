@@ -1,4 +1,4 @@
-# План разработки: 2D-редактор sci-fi карт
+﻿# План разработки: 2D-редактор sci-fi карт
 
 ## Легенда статусов
 - ✅ Готово
@@ -204,7 +204,7 @@
 | Инструмент Door | ✅ | Клик у стены комнаты |
 | Размещение дверей на стенах | ✅ | Автоопределение ближайшей стены |
 | Отрисовка дверей | ✅ | Цвет по типу |
-| Автоматические двери при генерации | ⚠️ | Базово в генераторе |
+| Автоматические двери при генерации | ✅ | Реализовано в генераторе |
 
 ### 6.2 Расширенная система коридоров
 | Задача | Статус | Примечания |
@@ -225,13 +225,13 @@
 | Типы CoalesceSettings | ✅ | corridorTypes.ts |
 | TypeMergePolicy / LayerMergePolicy | ✅ | corridorTypes.ts |
 | NormalizedSegment и хеширование | ✅ | corridorTypes.ts |
-| Алгоритм канонизации сегментов | ❌ | corridorCoalesce.ts |
-| Дедупликация сегментов | ❌ | corridorCoalesce.ts |
-| Обнаружение частичного перекрытия | ❌ | corridorCoalesce.ts |
-| Создание junction при слиянии | ❌ | corridorCoalesce.ts |
-| A* prefer-reuse интеграция | ❌ | corridorRouter.ts |
-| UI toggle в GenerationPanel | ❌ | GenerationPanel.tsx |
-| Unit тесты coalesce | ❌ | |
+| Алгоритм канонизации сегментов | ✅ | corridorCoalesce.ts |
+| Дедупликация сегментов | ✅ | corridorCoalesce.ts |
+| Обнаружение частичного перекрытия | ✅ | corridorCoalesce.ts |
+| Создание junction при слиянии | ✅ | corridorCoalesce.ts |
+| A* prefer-reuse интеграция | ✅ | corridorRouter.ts |
+| UI toggle в GenerationPanel | ✅ | GenerationPanel.tsx |
+| Unit тесты coalesce | ⚠️ | Проверено в интеграции |
 
 ### 6.4 Routing Intelligence (расширенный A*)
 | Задача | Статус | Примечания |
@@ -243,16 +243,16 @@
 | DebugOverlayOptions типы | ✅ | corridorTypes.ts |
 | StyleProfileId / RoutingStyleProfile | ✅ | corridorTypes.ts |
 | REALISM_PROFILE / FUTURISM_PROFILE | ✅ | corridorTypes.ts |
-| Cost function в A* | ❌ | corridorRouter.ts |
-| Junction split алгоритм | ❌ | corridorPostProcess.ts |
-| Junction merge/relax | ❌ | corridorPostProcess.ts |
-| Simplify pass | ❌ | corridorPostProcess.ts |
-| Beautify pass (ортогонализация) | ❌ | corridorPostProcess.ts |
-| TTRPG метрики расчёт | ❌ | ttrpgMetrics.ts |
-| Валидация нелинейности | ❌ | ttrpgMetrics.ts |
-| Primary spine / Secondary connectors | ❌ | generator.ts |
-| Redundancy pass (петли) | ❌ | generator.ts |
-| UI: Routing секция в GenerationPanel | ❌ | GenerationPanel.tsx |
+| Cost function в A* | ✅ | corridorRouter.ts |
+| Junction split алгоритм | ⚠️ | В базовой реализации |
+| Junction merge/relax | ⚠️ | В базовой реализации |
+| Simplify pass | ✅ | simplifyOrthogonalPath |
+| Beautify pass (ортогонализация) | ✅ | Встроен в router |
+| TTRPG метрики расчёт | ✅ | BuildTTRPGMetrics |
+| Валидация нелинейности | ✅ | ValidationIssue |
+| Primary spine / Secondary connectors | ✅ | Реализовано в Topology |
+| Redundancy pass (петли) | ✅ | Loopiness параметр |
+| UI: Routing секция в GenerationPanel | ✅ | Advanced settings |
 | Debug overlay рендеринг | ❌ | MapCanvas.tsx |
 
 ### 6.5 Переходники
