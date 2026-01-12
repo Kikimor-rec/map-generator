@@ -22,6 +22,14 @@ import {
 // State Types
 // ============================================================================
 
+export interface Snapshot {
+  id: string
+  name: string
+  decks: Deck[]
+  createdAt: string
+  thumbnail?: string
+}
+
 interface HistoryEntry {
   decks: Deck[]
   timestamp: number
@@ -58,6 +66,9 @@ interface EditorState {
   // History
   history: HistoryEntry[]
   historyIndex: number
+
+  // Snapshots
+  snapshots: Snapshot[]
 }
 
 // ============================================================================
@@ -84,6 +95,7 @@ const initialState: EditorState = {
   gridSize: 32,
   history: [],
   historyIndex: -1,
+  snapshots: [],
 }
 
 // ============================================================================
@@ -128,6 +140,9 @@ type EditorAction =
   | { type: 'REDO' }
   | { type: 'PUSH_HISTORY' }
   | { type: 'APPLY_GENERATED_MAP'; decks: Deck[] }
+  | { type: 'CREATE_SNAPSHOT'; name: string; thumbnail?: string }
+  | { type: 'RESTORE_SNAPSHOT'; snapshotId: string }
+  | { type: 'DELETE_SNAPSHOT'; snapshotId: string }
 
 // ============================================================================
 // Reducer
@@ -608,6 +623,43 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
       }
     }
 
+    case 'CREATE_SNAPSHOT': {
+      if (!state.project) return state
+      const snapshot: Snapshot = {
+        id: uuid(),
+        name: action.name,
+        decks: JSON.parse(JSON.stringify(state.project.decks)),
+        createdAt: new Date().toISOString(),
+        thumbnail: action.thumbnail,
+      }
+      return {
+        ...state,
+        snapshots: [...state.snapshots, snapshot],
+      }
+    }
+
+    case 'RESTORE_SNAPSHOT': {
+      if (!state.project) return state
+      const snapshot = state.snapshots.find(s => s.id === action.snapshotId)
+      if (!snapshot) return state
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          decks: JSON.parse(JSON.stringify(snapshot.decks)),
+        },
+        activeDeckId: snapshot.decks[0]?.id ?? state.activeDeckId,
+        isDirty: true,
+      }
+    }
+
+    case 'DELETE_SNAPSHOT': {
+      return {
+        ...state,
+        snapshots: state.snapshots.filter(s => s.id !== action.snapshotId),
+      }
+    }
+
     default:
       return state
   }
@@ -624,6 +676,8 @@ interface EditorContextValue {
   activeDeck: Deck | null
   rooms: Room[]
   corridors: Corridor[]
+  junctions: import('@core/types').CorridorJunction[]
+  lineJumps: import('@core/types').CorridorLineJump[]
   canUndo: boolean
   canRedo: boolean
 }
@@ -686,6 +740,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
   const activeDeck = state.project?.decks.find(d => d.id === state.activeDeckId) ?? null
   const rooms = activeDeck?.rooms ?? []
   const corridors = activeDeck?.corridors ?? []
+  const junctions = activeDeck?.junctions ?? []
+  const lineJumps = activeDeck?.lineJumps ?? []
   const canUndo = state.historyIndex > 0
   const canRedo = state.historyIndex < state.history.length - 1
 
@@ -695,6 +751,8 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     activeDeck,
     rooms,
     corridors,
+    junctions,
+    lineJumps,
     canUndo,
     canRedo,
   }
@@ -760,4 +818,7 @@ export const actions = {
   redo: (): EditorAction => ({ type: 'REDO' }),
   pushHistory: (): EditorAction => ({ type: 'PUSH_HISTORY' }),
   applyGeneratedMap: (decks: Deck[]): EditorAction => ({ type: 'APPLY_GENERATED_MAP', decks }),
+  createSnapshot: (name: string, thumbnail?: string): EditorAction => ({ type: 'CREATE_SNAPSHOT', name, thumbnail }),
+  restoreSnapshot: (snapshotId: string): EditorAction => ({ type: 'RESTORE_SNAPSHOT', snapshotId }),
+  deleteSnapshot: (snapshotId: string): EditorAction => ({ type: 'DELETE_SNAPSHOT', snapshotId }),
 }

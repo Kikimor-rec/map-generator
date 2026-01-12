@@ -1,11 +1,11 @@
 /**
- * SkeletonGenerator V2
+ * SkeletonGenerator V2 - SIMPLIFIED ROBUST VERSION
  * 
- * Improved skeleton-based generation with:
- * - Hub Rooms: Key rooms that are PART of the skeleton (corridors pass through them)
- * - Leaf Rooms: Secondary rooms attached to the side of corridors
- * - Multi-Spine: Multiple parallel spines for medium/large ships
- * - Better TTRPG layout with tactical chokepoints
+ * Strategy:
+ * 1. Direct Grid Manipulation (No abstract sockets)
+ * 2. Strict Integer Coordinates
+ * 3. Immediate Corridor rasterization
+ * 4. A* Intelligent Routing
  */
 
 import {
@@ -13,918 +13,676 @@ import {
     LayoutConnector,
     LayoutRoom,
     Junction,
-    Socket,
     Port,
     Point,
     GenerationRequest,
-    TopologyGraph,
     SeededRNG
 } from './types';
 import { createRNG } from './rng';
 import { LayoutOptions } from './layout';
 
 // ============================================================================
-// TYPES
-// ============================================================================
-
-/** Hub Socket - a point where a HUB room interrupts the corridor */
-interface HubSocket {
-    id: string;
-    type: 'hub';
-    x: number;  // Grid coords
-    y: number;
-    /** Which corridor this hub interrupts */
-    corridorId: string;
-    /** Preferred room types for this hub */
-    preferredTypes: string[];
-    /** Entry direction (where corridor comes FROM) */
-    entryDirection: 'top' | 'bottom' | 'left' | 'right';
-    /** Exit direction (where corridor goes TO) */
-    exitDirection: 'top' | 'bottom' | 'left' | 'right';
-    /** Suggested size in grid units */
-    suggestedWidth: number;
-    suggestedHeight: number;
-}
-
-/** Leaf Socket - a point where a room attaches to the SIDE of a corridor */
-interface LeafSocket {
-    id: string;
-    type: 'leaf';
-    x: number;  // Grid coords
-    y: number;
-    /** Direction the room extends from corridor */
-    direction: 'top' | 'bottom' | 'left' | 'right';
-    /** Suggested size */
-    suggestedWidth: number;
-    suggestedHeight: number;
-}
-
-type SkeletonSocket = HubSocket | LeafSocket;
-
-/** Corridor segment before room placement */
-interface CorridorSegment {
-    id: string;
-    fromX: number;
-    fromY: number;
-    toX: number;
-    toY: number;
-    width: number;  // Grid units
-    /** Is this segment part of a main spine? */
-    isSpine: boolean;
-    /** Hub that interrupts this segment (if any) */
-    interruptedByHub?: string;
-}
-
-interface SkeletonV2Result {
-    segments: CorridorSegment[];
-    hubs: HubSocket[];
-    leaves: LeafSocket[];
-    junctions: Junction[];
-}
-
-interface PlacedHub {
-    socket: HubSocket;
-    room: LayoutRoom;
-}
-
-// ============================================================================
-// CONSTANTS
+// CONFIG
 // ============================================================================
 
 const CELL_SIZE = 40;
+const SPINE_WIDTH = 24;
+const LEAF_WIDTH = 16;
 
-/** Room types that should be HUBs (part of main path) */
-const HUB_ROOM_TYPES = [
-    'bridge', 'cockpit', 'command',
-    'engineering', 'reactor', 'powerCore',
-    'medbay', 'medBay', 'infirmary',
-    'cargoBay', 'cargo', 'hangar',
-    'commonArea', 'messHall', 'lounge'
-];
+// A* Costs
+const COST_EMPTY = 5;
+const COST_CORRIDOR = 1;
+const COST_ROOM_BUFFER = 20;
+const COST_ROOM_INTERIOR = 200;
+const COST_WALL = 1000;
 
-/** Room types that should be leaves (side rooms) */
-const LEAF_ROOM_TYPES = [
-    'quarters', 'cabin', 'bunk',
-    'storage', 'closet', 'locker',
-    'lab', 'science', 'research',
-    'armory', 'weapons',
-    'airlock', 'lifepod',
-    'maintenance', 'utility'
-];
+interface AStarNode {
+    x: number;
+    y: number;
+    g: number;
+    h: number;
+    parent: AStarNode | null;
+}
 
-// ============================================================================
-// MAIN GENERATOR
-// ============================================================================
-
+/**
+ * Robust Grid-Based Skeleton Generator
+ * Supports: 'ship' (Spine/Ribs) and 'station' (Hub/Wheel)
+ */
 export class SkeletonGeneratorV2 {
     private rng: SeededRNG;
+    private gridWidth: number = 0;
+    private gridHeight: number = 0;
+
+    // Grid state (0=Empty, 1=Room, 2=Corridor)
+    private grid: number[][] = [];
 
     constructor(rng: SeededRNG) {
         this.rng = rng;
     }
 
-    /**
-     * Generate skeleton based on ship parameters
-     */
-    generate(request: GenerationRequest, width: number, height: number): SkeletonV2Result {
-        const archetype = request.archetype || 'ship';
-        const sizeTier = request.sizeTier || 'md';
-
-        // Determine number of spines based on size
-        const spineCount = this.getSpineCount(sizeTier);
-
-        if (archetype === 'station') {
-            return this.generateStationSkeleton(width, height, spineCount);
-        } else if (archetype === 'outpost') {
-            return this.generateOutpostSkeleton(width, height);
-        } else {
-            return this.generateShipSkeleton(width, height, spineCount, request);
-        }
-    }
-
-    private getSpineCount(sizeTier: string): number {
-        switch (sizeTier) {
-            case 'xs': return 1;
-            case 'sm': return 1;
-            case 'md': return this.rng.chance(0.4) ? 2 : 1;
-            case 'lg': return this.rng.chance(0.6) ? 3 : 2;
-            case 'xl': return 3;
-            default: return 1;
-        }
-    }
-
     // ========================================================================
-    // SHIP SKELETON (Linear with ribs)
+    // JUNCTIONS AND CLEANUP
     // ========================================================================
 
-    private generateShipSkeleton(
-        width: number,
-        height: number,
-        spineCount: number,
-        request: GenerationRequest
-    ): SkeletonV2Result {
-        const segments: CorridorSegment[] = [];
-        const hubs: HubSocket[] = [];
-        const leaves: LeafSocket[] = [];
+    private detectJunctions(connectors: LayoutConnector[]): Junction[] {
         const junctions: Junction[] = [];
+        const directions = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 
-        const centerX = Math.floor(width / 2);
-        const spineStartY = Math.floor(height * 0.15);
-        const spineEndY = Math.floor(height * 0.85);
-        const spineHeight = spineEndY - spineStartY;
+        for (let y = 0; y < this.gridHeight; y++) {
+            for (let x = 0; x < this.gridWidth; x++) {
+                if (this.grid[y][x] === 2) { // Is corridor
+                    let neighbors = 0;
+                    const connectedConnectorIds: string[] = [];
 
-        // Calculate spine positions
-        const spineSpacing = spineCount > 1 ? Math.floor(width * 0.25) : 0;
-        const spineXPositions: number[] = [];
+                    // Check cardinality
+                    for (const [dx, dy] of directions) {
+                        if (this.isValid(x + dx, y + dy) && (this.grid[y + dy][x + dx] === 2 || this.grid[y + dy][x + dx] === 1)) {
+                            neighbors++;
+                        }
+                    }
 
-        if (spineCount === 1) {
-            spineXPositions.push(centerX);
-        } else if (spineCount === 2) {
-            spineXPositions.push(centerX - spineSpacing);
-            spineXPositions.push(centerX + spineSpacing);
-        } else {
-            spineXPositions.push(centerX - spineSpacing);
-            spineXPositions.push(centerX);
-            spineXPositions.push(centerX + spineSpacing);
-        }
-
-        // Generate each spine with hubs
-        for (let si = 0; si < spineCount; si++) {
-            const spineX = spineXPositions[si];
-            const isMainSpine = si === Math.floor(spineCount / 2); // Center spine is main
-
-            // Divide spine into segments with hubs
-            const numHubs = isMainSpine ? 3 : 2;
-            const hubPositions: number[] = [];
-
-            for (let h = 1; h <= numHubs; h++) {
-                const hubY = spineStartY + Math.floor(spineHeight * (h / (numHubs + 1)));
-                hubPositions.push(hubY);
-            }
-
-            // Create spine segments between hubs
-            let lastY = spineStartY;
-            for (let h = 0; h <= hubPositions.length; h++) {
-                const endY = h < hubPositions.length ? hubPositions[h] : spineEndY;
-
-                // Create corridor segment
-                segments.push({
-                    id: `spine_${si}_seg_${h}`,
-                    fromX: spineX,
-                    fromY: lastY,
-                    toX: spineX,
-                    toY: endY,
-                    width: isMainSpine ? 2 : 1,
-                    isSpine: true
-                });
-
-                // Create hub at this position (except for last segment end)
-                if (h < hubPositions.length) {
-                    const hubTypes = this.getHubTypesForPosition(h, numHubs, isMainSpine);
-                    hubs.push({
-                        id: `hub_${si}_${h}`,
-                        type: 'hub',
-                        x: spineX,
-                        y: hubPositions[h],
-                        corridorId: `spine_${si}_seg_${h}`,
-                        preferredTypes: hubTypes,
-                        entryDirection: 'top',
-                        exitDirection: 'bottom',
-                        suggestedWidth: isMainSpine ? 5 : 4,
-                        suggestedHeight: isMainSpine ? 4 : 3
-                    });
-                }
-
-                lastY = endY;
-            }
-
-            // Add terminal hubs (bridge at top, engine at bottom)
-            if (isMainSpine) {
-                hubs.push({
-                    id: `hub_${si}_bridge`,
-                    type: 'hub',
-                    x: spineX,
-                    y: spineStartY - 3,
-                    corridorId: `spine_${si}_seg_0`,
-                    preferredTypes: ['bridge', 'cockpit', 'command'],
-                    entryDirection: 'bottom',
-                    exitDirection: 'bottom', // Dead end
-                    suggestedWidth: 6,
-                    suggestedHeight: 5
-                });
-
-                hubs.push({
-                    id: `hub_${si}_engine`,
-                    type: 'hub',
-                    x: spineX,
-                    y: spineEndY + 1,
-                    corridorId: `spine_${si}_seg_${numHubs}`,
-                    preferredTypes: ['engineering', 'reactor', 'engine'],
-                    entryDirection: 'top',
-                    exitDirection: 'top', // Dead end
-                    suggestedWidth: 6,
-                    suggestedHeight: 5
-                });
-            }
-        }
-
-        // Create ribs (cross-connections) between spines
-        if (spineCount > 1) {
-            const ribCount = Math.floor(spineHeight / 6);
-            for (let r = 1; r <= ribCount; r++) {
-                const ribY = spineStartY + Math.floor(spineHeight * (r / (ribCount + 1)));
-
-                // Connect adjacent spines
-                for (let s = 0; s < spineCount - 1; s++) {
-                    const fromX = spineXPositions[s];
-                    const toX = spineXPositions[s + 1];
-
-                    segments.push({
-                        id: `rib_${r}_${s}`,
-                        fromX: fromX,
-                        fromY: ribY,
-                        toX: toX,
-                        toY: ribY,
-                        width: 1,
-                        isSpine: false
-                    });
-
-                    // Add leaf sockets along ribs
-                    const ribLength = toX - fromX;
-                    const leafCount = Math.floor(ribLength / 5);
-                    for (let l = 1; l <= leafCount; l++) {
-                        const leafX = fromX + Math.floor(ribLength * (l / (leafCount + 1)));
-                        const direction = this.rng.chance(0.5) ? 'top' : 'bottom';
-
-                        leaves.push({
-                            id: `leaf_rib_${r}_${s}_${l}`,
-                            type: 'leaf',
-                            x: leafX,
-                            y: ribY,
-                            direction: direction as any,
-                            suggestedWidth: 3,
-                            suggestedHeight: 3
+                    if (neighbors >= 3) {
+                        // It's a junction!
+                        junctions.push({
+                            id: `jnc_${x}_${y}`,
+                            x: x * CELL_SIZE,
+                            y: y * CELL_SIZE,
+                            connectorIds: [], // To be populated if we split segments
+                            type: neighbors === 4 ? 'cross' : 'tee'
                         });
                     }
                 }
+            }
+        }
+        return junctions;
+    }
 
-                // Create junction at rib intersections
-                for (const spineX of spineXPositions) {
-                    junctions.push({
-                        id: `junc_rib_${r}_spine_${spineX}`,
-                        x: spineX * CELL_SIZE,
-                        y: ribY * CELL_SIZE,
-                        connectorIds: [],
-                        type: 'cross'
+    private splitConnectorsAtJunctions(connectors: LayoutConnector[], junctions: Junction[]): LayoutConnector[] {
+        const newConnectors: LayoutConnector[] = [];
+        const junctionMap = new Map<string, string>();
+        junctions.forEach(j => junctionMap.set(`${j.x},${j.y}`, j.id));
+
+        for (const conn of connectors) {
+            const segments: Point[][] = [];
+            const splitIds: string[] = [];
+            let segmentStart = 0;
+
+            for (let i = 0; i < conn.path.length; i++) {
+                const p = conn.path[i];
+                const key = `${p.x},${p.y}`;
+                const jId = junctionMap.get(key);
+
+                // Split if we hit a junction in the middle of the path
+                if (jId && i > 0 && i < conn.path.length - 1) {
+                    segments.push(conn.path.slice(segmentStart, i + 1));
+                    splitIds.push(jId);
+                    segmentStart = i;
+                }
+            }
+            segments.push(conn.path.slice(segmentStart));
+
+            if (segments.length === 1) {
+                newConnectors.push(conn);
+            } else {
+                let fromId = conn.fromRoomId;
+                for (let k = 0; k < segments.length; k++) {
+                    const toId = (k < splitIds.length) ? splitIds[k] : conn.toRoomId;
+                    const segId = `${conn.id}_s${k}`;
+
+                    newConnectors.push({
+                        id: segId,
+                        fromRoomId: fromId,
+                        toRoomId: toId,
+                        kind: conn.kind,
+                        path: segments[k],
+                        width: conn.width,
+                        widthClass: conn.widthClass || 'standard'
+                    });
+
+                    // Update junction references
+                    if (fromId.startsWith('jnc_')) {
+                        const j = junctions.find(j => j.id === fromId);
+                        if (j && !j.connectorIds.includes(segId)) j.connectorIds.push(segId);
+                    }
+                    if (toId.startsWith('jnc_')) {
+                        const j = junctions.find(j => j.id === toId);
+                        if (j && !j.connectorIds.includes(segId)) j.connectorIds.push(segId);
+                    }
+
+                    fromId = toId;
+                }
+            }
+        }
+        return newConnectors;
+    }
+
+    public generate(options: LayoutOptions): DeckLayout[] {
+        // Defensive Input Handling
+        const request = (options.request as any) || { seed: '0', mapParams: {} };
+        const mapParams = request.mapParams || {};
+        const topology = options.topology || { rooms: [], edges: [] };
+
+        // Try getting archetype from direct prop (hack) or mapParams
+        const archetype = (request.archetype || mapParams.archetype || 'ship').toLowerCase();
+
+        // 1. Initialize Grid
+        const safeRooms = topology.rooms || [];
+        const totalTiles = safeRooms.reduce((s: number, r: any) => {
+            const w = r.targetSize?.width || 4;
+            const h = r.targetSize?.height || 4;
+            return s + (w * h);
+        }, 0);
+
+        // Compact grid
+        const dimension = Math.max(60, Math.ceil(Math.sqrt(totalTiles * 5) + 20));
+        this.gridWidth = dimension;
+        this.gridHeight = dimension;
+        this.grid = Array(this.gridHeight).fill(0).map(() => Array(this.gridWidth).fill(0));
+
+        const rooms: LayoutRoom[] = [];
+        const connectors: LayoutConnector[] = [];
+
+        console.log(`[SkeletonV2] Generating ${archetype} on ${this.gridWidth}x${this.gridHeight} (Input Tiles: ${totalTiles})`);
+
+        if (archetype === 'station') {
+            this.generateStationLayout(topology, rooms, connectors);
+        } else {
+            this.generateShipLayout(topology, rooms, connectors);
+        }
+
+        const junctions = this.detectJunctions(connectors);
+        const splitConnectors = this.splitConnectorsAtJunctions(connectors, junctions);
+
+        console.log(`[SkeletonV2] Generated ${rooms.length} rooms, ${splitConnectors.length} connectors (split), ${junctions.length} junctions`);
+
+        return [{
+            deckIndex: 0,
+            gridWidth: this.gridWidth,
+            gridHeight: this.gridHeight,
+            rooms: rooms,
+            connectors: splitConnectors,
+            junctions: junctions
+        }];
+    }
+
+    // ========================================================================
+    // PATHFINDING (A*)
+    // ========================================================================
+
+    private findSmartPath(px1: number, py1: number, px2: number, py2: number): Point[] {
+        const x1 = Math.round(px1 / CELL_SIZE);
+        const y1 = Math.round(py1 / CELL_SIZE);
+        const x2 = Math.round(px2 / CELL_SIZE);
+        const y2 = Math.round(py2 / CELL_SIZE);
+
+        const costs = this.createCostGrid();
+
+        // Ensure Start/End are passable
+        if (this.isValid(x1, y1)) costs[y1][x1] = COST_CORRIDOR;
+        if (this.isValid(x2, y2)) costs[y2][x2] = COST_CORRIDOR;
+
+        const openSet: AStarNode[] = [];
+        const closedSet = new Set<string>();
+
+        const startNode: AStarNode = { x: x1, y: y1, g: 0, h: this.heuristic(x1, y1, x2, y2), parent: null };
+        openSet.push(startNode);
+
+        while (openSet.length > 0) {
+            openSet.sort((a, b) => (a.g + a.h) - (b.g + b.h));
+            const current = openSet.shift()!;
+
+            if (current.x === x2 && current.y === y2) {
+                return this.reconstructPath(current);
+            }
+
+            const key = `${current.x},${current.y}`;
+            if (closedSet.has(key)) continue;
+            closedSet.add(key);
+
+            const neighbors = [
+                { x: current.x, y: current.y - 1 },
+                { x: current.x, y: current.y + 1 },
+                { x: current.x - 1, y: current.y },
+                { x: current.x + 1, y: current.y }
+            ];
+
+            for (const n of neighbors) {
+                if (!this.isValid(n.x, n.y)) continue;
+                if (closedSet.has(`${n.x},${n.y}`)) continue;
+
+                const cost = costs[n.y][n.x];
+                if (cost >= COST_WALL) continue;
+
+                const gScore = current.g + cost;
+
+                const existing = openSet.find(o => o.x === n.x && o.y === n.y);
+                if (existing) {
+                    if (gScore < existing.g) {
+                        existing.g = gScore;
+                        existing.parent = current;
+                    }
+                } else {
+                    openSet.push({
+                        x: n.x, y: n.y,
+                        g: gScore,
+                        h: this.heuristic(n.x, n.y, x2, y2),
+                        parent: current
                     });
                 }
             }
-        } else {
-            // Single spine - add leaf sockets along it
-            const leafCount = Math.floor(spineHeight / 4);
-            for (let l = 1; l <= leafCount; l++) {
-                const leafY = spineStartY + Math.floor(spineHeight * (l / (leafCount + 1)));
-                const direction = this.rng.chance(0.5) ? 'left' : 'right';
+        }
 
-                leaves.push({
-                    id: `leaf_spine_${l}`,
-                    type: 'leaf',
-                    x: spineXPositions[0],
-                    y: leafY,
-                    direction: direction as any,
-                    suggestedWidth: 3,
-                    suggestedHeight: 3
+        console.warn(`[SkeletonV2] A* failed from ${x1},${y1} to ${x2},${y2}. Falling back to L-Path.`);
+        // Mark grid anyway for visual debug if needed
+        // this.drawPathOnGrid(fallbackPath);
+        return this.createLPath(px1, py1, px2, py2);
+    }
+
+    private heuristic(x1: number, y1: number, x2: number, y2: number): number {
+        return (Math.abs(x1 - x2) + Math.abs(y1 - y2)) * COST_EMPTY;
+    }
+
+    private reconstructPath(node: AStarNode): Point[] {
+        const path: Point[] = [];
+        let curr: AStarNode | null = node;
+        while (curr) {
+            path.push({ x: curr.x * CELL_SIZE, y: curr.y * CELL_SIZE });
+            if (this.isValid(curr.x, curr.y)) {
+                this.grid[curr.y][curr.x] = 2; // Mark as corridor on global grid
+            }
+            curr = curr.parent;
+        }
+        return path.reverse();
+    }
+
+    private createCostGrid(): number[][] {
+        const costs = Array(this.gridHeight).fill(0).map(() => Array(this.gridWidth).fill(COST_EMPTY));
+
+        for (let y = 0; y < this.gridHeight; y++) {
+            for (let x = 0; x < this.gridWidth; x++) {
+                const val = this.grid[y][x];
+                if (val === 1) costs[y][x] = COST_ROOM_INTERIOR;
+                else if (val === 2) costs[y][x] = COST_CORRIDOR;
+            }
+        }
+
+        // Add Buffer Zones
+        for (let y = 0; y < this.gridHeight; y++) {
+            for (let x = 0; x < this.gridWidth; x++) {
+                if (this.grid[y][x] === 1) {
+                    // Mark neighbors
+                    const dirs = [[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+                    for (const [dx, dy] of dirs) {
+                        const nx = x + dx;
+                        const ny = y + dy;
+                        if (this.isValid(nx, ny) && costs[ny][nx] === COST_EMPTY) {
+                            costs[ny][nx] = COST_ROOM_BUFFER;
+                        }
+                    }
+                }
+            }
+        }
+        return costs;
+    }
+
+    private isValid(x: number, y: number): boolean {
+        return x >= 0 && x < this.gridWidth && y >= 0 && y < this.gridHeight;
+    }
+
+    // ========================================================================
+    // SHIP LAYOUT
+    // ========================================================================
+
+    private generateShipLayout(topology: any, rooms: LayoutRoom[], connectors: LayoutConnector[]) {
+        const safeRooms = topology.rooms || [];
+
+        const hubTypes = ['bridge', 'engineering', 'medbay', 'cargo', 'hangar'];
+        const hubRooms = safeRooms.filter((r: any) => hubTypes.some((t: string) => r.roomType?.toLowerCase().includes(t)));
+        const leafRooms = safeRooms.filter((r: any) => !hubRooms.includes(r));
+
+        const centerX = Math.floor(this.gridWidth / 2);
+        let currentY = Math.floor(this.gridHeight * 0.1);
+
+        const bridge = hubRooms.find((r: any) => r.roomType === 'bridge' || r.roomType === 'cockpit');
+        const engine = hubRooms.find((r: any) => r.roomType === 'engineering' || r.roomType === 'reactor');
+        const bufferHubs = hubRooms.filter((r: any) => r !== bridge && r !== engine);
+
+        const orderedHubs = [bridge, ...bufferHubs, engine].filter((r: any) => r !== undefined);
+
+        const spinePoints: { x: number, y: number }[] = [];
+
+        // Place Hubs
+        for (const roomData of orderedHubs) {
+            const rw = this.getRoomDim(roomData, 'width');
+            const rh = this.getRoomDim(roomData, 'height');
+
+            const x = centerX - Math.floor(rw / 2);
+            const y = currentY;
+
+            this.occupyGrid(x, y, rw, rh, 1);
+            const ports = this.createPorts(roomData.id, x, y, rw, rh, roomData);
+
+            rooms.push(this.createRoom(roomData, x, y, rw, rh, ports));
+
+            // Mark spine occupancy
+            for (let py = y; py < y + rh; py++) {
+                if (py < this.gridHeight) spinePoints.push({ x: centerX, y: py });
+            }
+
+            currentY += rh + 2;
+        }
+
+        // Connect Hubs (Spine)
+        if (rooms.length > 1) {
+            for (let i = 0; i < rooms.length - 1; i++) {
+                const r1 = rooms[i];
+                const r2 = rooms[i + 1];
+
+                // Spine is simple, use specialized V-path to avoid cost grid if we want straight spine
+                // But let's try A* too, it should prefer the straight line if empty
+                const p1 = this.getBestPort(r1, r2.x, r2.y); // Bottom of r1
+                const p2 = this.getBestPort(r2, p1.x, p1.y); // Top of r2
+
+                const path = this.findSmartPath(p1.x, p1.y, p2.x, p2.y);
+
+                connectors.push({
+                    id: `spine_${i}`,
+                    fromRoomId: r1.id,
+                    toRoomId: r2.id,
+                    kind: 'corridor',
+                    path: path,
+                    width: SPINE_WIDTH,
+                    widthClass: 'wide'
                 });
             }
         }
 
-        return { segments, hubs, leaves, junctions };
-    }
+        // Place Leaves
+        let side = -1;
+        let leafYIndex = 0;
+        const leafSlots = spinePoints.filter((_, i) => i % 2 === 1);
+        if (leafSlots.length === 0 && spinePoints.length > 0) leafSlots.push(...spinePoints);
 
-    private getHubTypesForPosition(index: number, total: number, isMain: boolean): string[] {
-        if (isMain) {
-            if (index === 0) return ['medbay', 'infirmary', 'commonArea'];
-            if (index === total - 1) return ['cargoBay', 'cargo', 'hangar'];
-            return ['commonArea', 'messHall', 'lounge'];
-        } else {
-            if (index === 0) return ['armory', 'security'];
-            return ['storage', 'cargo', 'utility'];
-        }
-    }
+        for (const roomData of leafRooms) {
+            if (leafSlots.length === 0) break;
+            const slot = leafSlots[leafYIndex % leafSlots.length];
+            leafYIndex++;
 
-    // ========================================================================
-    // STATION SKELETON (Ring-based)
-    // ========================================================================
+            const rw = this.getRoomDim(roomData, 'width');
+            const rh = this.getRoomDim(roomData, 'height');
 
-    private generateStationSkeleton(width: number, height: number, ringCount: number): SkeletonV2Result {
-        const segments: CorridorSegment[] = [];
-        const hubs: HubSocket[] = [];
-        const leaves: LeafSocket[] = [];
-        const junctions: Junction[] = [];
+            const gap = 2; // Increase gap for corridor maneuvering
+            let x = 0;
+            let portWall: 'left' | 'right';
 
-        const centerX = Math.floor(width / 2);
-        const centerY = Math.floor(height / 2);
-        const maxRadius = Math.min(width, height) * 0.4;
-
-        // Central hub
-        hubs.push({
-            id: 'hub_center',
-            type: 'hub',
-            x: centerX,
-            y: centerY,
-            corridorId: 'center',
-            preferredTypes: ['command', 'bridge', 'operations'],
-            entryDirection: 'top',
-            exitDirection: 'bottom',
-            suggestedWidth: 6,
-            suggestedHeight: 6
-        });
-
-        // Create rings with hubs at cardinal points
-        for (let r = 1; r <= ringCount; r++) {
-            const radius = Math.floor(maxRadius * (r / ringCount));
-            const spokeCount = 4 + r * 2; // More spokes for outer rings
-
-            for (let s = 0; s < spokeCount; s++) {
-                const angle = (s / spokeCount) * Math.PI * 2;
-                const x = centerX + Math.floor(Math.cos(angle) * radius);
-                const y = centerY + Math.floor(Math.sin(angle) * radius);
-
-                // Hub at cardinal directions
-                if (s % Math.floor(spokeCount / 4) === 0) {
-                    hubs.push({
-                        id: `hub_ring_${r}_${s}`,
-                        type: 'hub',
-                        x: x,
-                        y: y,
-                        corridorId: `ring_${r}`,
-                        preferredTypes: r === 1 ? ['medbay', 'engineering'] : ['cargo', 'storage'],
-                        entryDirection: 'left',
-                        exitDirection: 'right',
-                        suggestedWidth: 4,
-                        suggestedHeight: 4
-                    });
-                } else {
-                    // Leaf sockets between hubs
-                    leaves.push({
-                        id: `leaf_ring_${r}_${s}`,
-                        type: 'leaf',
-                        x: x,
-                        y: y,
-                        direction: angle < Math.PI ? 'bottom' : 'top',
-                        suggestedWidth: 3,
-                        suggestedHeight: 3
-                    });
-                }
-            }
-
-            // Spokes connecting to center
-            for (let s = 0; s < 4; s++) {
-                const angle = (s / 4) * Math.PI * 2;
-                const outerX = centerX + Math.floor(Math.cos(angle) * radius);
-                const outerY = centerY + Math.floor(Math.sin(angle) * radius);
-
-                if (r === 1) {
-                    // Connect to center
-                    segments.push({
-                        id: `spoke_${r}_${s}`,
-                        fromX: centerX,
-                        fromY: centerY,
-                        toX: outerX,
-                        toY: outerY,
-                        width: 2,
-                        isSpine: true
-                    });
-                } else {
-                    // Connect to inner ring
-                    const innerRadius = Math.floor(maxRadius * ((r - 1) / ringCount));
-                    const innerX = centerX + Math.floor(Math.cos(angle) * innerRadius);
-                    const innerY = centerY + Math.floor(Math.sin(angle) * innerRadius);
-
-                    segments.push({
-                        id: `spoke_${r}_${s}`,
-                        fromX: innerX,
-                        fromY: innerY,
-                        toX: outerX,
-                        toY: outerY,
-                        width: 1,
-                        isSpine: false
-                    });
-                }
-            }
-        }
-
-        return { segments, hubs, leaves, junctions };
-    }
-
-    // ========================================================================
-    // OUTPOST SKELETON (Cluster-based)
-    // ========================================================================
-
-    private generateOutpostSkeleton(width: number, height: number): SkeletonV2Result {
-        const segments: CorridorSegment[] = [];
-        const hubs: HubSocket[] = [];
-        const leaves: LeafSocket[] = [];
-        const junctions: Junction[] = [];
-
-        const centerX = Math.floor(width / 2);
-        const centerY = Math.floor(height / 2);
-
-        // Central hub
-        hubs.push({
-            id: 'hub_main',
-            type: 'hub',
-            x: centerX,
-            y: centerY,
-            corridorId: 'center',
-            preferredTypes: ['command', 'operations', 'commonArea'],
-            entryDirection: 'top',
-            exitDirection: 'bottom',
-            suggestedWidth: 5,
-            suggestedHeight: 5
-        });
-
-        // Generate satellite hubs
-        const satelliteCount = this.rng.randomInt(3, 5);
-        const usedAngles: number[] = [];
-
-        for (let i = 0; i < satelliteCount; i++) {
-            // Find unused angle
-            let angle: number;
-            do {
-                angle = this.rng.random() * Math.PI * 2;
-            } while (usedAngles.some(a => Math.abs(a - angle) < 0.8));
-            usedAngles.push(angle);
-
-            const distance = this.rng.randomInt(8, 15);
-            const x = centerX + Math.floor(Math.cos(angle) * distance);
-            const y = centerY + Math.floor(Math.sin(angle) * distance);
-
-            hubs.push({
-                id: `hub_satellite_${i}`,
-                type: 'hub',
-                x: x,
-                y: y,
-                corridorId: `connector_${i}`,
-                preferredTypes: ['cargo', 'engineering', 'quarters', 'lab'],
-                entryDirection: this.getOppositeDirection(angle),
-                exitDirection: this.getOppositeDirection(angle),
-                suggestedWidth: 4,
-                suggestedHeight: 4
-            });
-
-            // Connect to center
-            segments.push({
-                id: `connector_${i}`,
-                fromX: centerX,
-                fromY: centerY,
-                toX: x,
-                toY: y,
-                width: 1,
-                isSpine: true
-            });
-
-            // Add leaf sockets around satellite
-            const leafDir = this.rng.chance(0.5) ? 'left' : 'right';
-            leaves.push({
-                id: `leaf_satellite_${i}`,
-                type: 'leaf',
-                x: x + (leafDir === 'left' ? -2 : 2),
-                y: y,
-                direction: leafDir as any,
-                suggestedWidth: 2,
-                suggestedHeight: 2
-            });
-        }
-
-        return { segments, hubs, leaves, junctions };
-    }
-
-    private getOppositeDirection(angle: number): 'top' | 'bottom' | 'left' | 'right' {
-        const deg = (angle * 180 / Math.PI + 360) % 360;
-        if (deg >= 315 || deg < 45) return 'left';
-        if (deg >= 45 && deg < 135) return 'top';
-        if (deg >= 135 && deg < 225) return 'right';
-        return 'bottom';
-    }
-
-    // ========================================================================
-    // ROOM PLACEMENT
-    // ========================================================================
-
-    /**
-     * Place rooms on the skeleton
-     * Returns placed rooms and updated connectors
-     */
-    placeRooms(
-        skeleton: SkeletonV2Result,
-        program: { rooms: any[] }
-    ): { rooms: LayoutRoom[]; connectors: LayoutConnector[] } {
-        const rooms: LayoutRoom[] = [];
-        const connectors: LayoutConnector[] = [];
-        const placedHubs: PlacedHub[] = [];
-
-        // Separate rooms by type
-        const hubRooms = program.rooms.filter(r =>
-            HUB_ROOM_TYPES.some(t => r.roomType?.toLowerCase().includes(t.toLowerCase()))
-        );
-        const leafRooms = program.rooms.filter(r =>
-            !hubRooms.includes(r)
-        );
-
-        console.log(`[SkeletonV2] Placing ${hubRooms.length} hub rooms, ${leafRooms.length} leaf rooms`);
-        console.log(`[SkeletonV2] Available: ${skeleton.hubs.length} hub sockets, ${skeleton.leaves.length} leaf sockets`);
-
-        // 1. Place Hub Rooms (on skeleton path)
-        const shuffledHubs = this.rng.shuffle([...skeleton.hubs]);
-        for (const hubSocket of shuffledHubs) {
-            // Find matching room
-            const matchingRoom = hubRooms.find(r =>
-                hubSocket.preferredTypes.some(pt =>
-                    r.roomType?.toLowerCase().includes(pt.toLowerCase()) ||
-                    r.label?.toLowerCase().includes(pt.toLowerCase())
-                )
-            );
-
-            const roomToPlace = matchingRoom || hubRooms[0];
-            if (!roomToPlace) continue;
-
-            // Place room at hub position
-            const room = this.createHubRoom(roomToPlace, hubSocket);
-
-            // Check collision with existing rooms
-            if (!this.checkCollision(room, rooms)) {
-                rooms.push(room);
-                placedHubs.push({ socket: hubSocket, room });
-
-                // Remove from available
-                const idx = hubRooms.indexOf(roomToPlace);
-                if (idx > -1) hubRooms.splice(idx, 1);
-            }
-        }
-
-        // 2. Place Leaf Rooms (on sides)
-        const shuffledLeaves = this.rng.shuffle([...skeleton.leaves]);
-        for (const leafSocket of shuffledLeaves) {
-            if (leafRooms.length === 0) break;
-
-            const roomToPlace = leafRooms[0];
-            const room = this.createLeafRoom(roomToPlace, leafSocket);
-
-            if (!this.checkCollision(room, rooms)) {
-                rooms.push(room);
-                leafRooms.shift();
-            }
-        }
-
-        // 3. Generate connectors based on placed hubs
-        // Connectors pass THROUGH hub rooms
-        for (const segment of skeleton.segments) {
-            const segmentConnectors = this.createConnectorsForSegment(segment, placedHubs, rooms);
-            connectors.push(...segmentConnectors);
-        }
-
-        // 4. Connect leaf rooms to nearest corridor
-        for (const room of rooms) {
-            if (!placedHubs.some(ph => ph.room.id === room.id)) {
-                // This is a leaf room - connect to nearest point
-                const connector = this.createLeafConnector(room, connectors, rooms);
-                if (connector) {
-                    connectors.push(connector);
-                }
-            }
-        }
-
-        return { rooms, connectors };
-    }
-
-    private createHubRoom(programRoom: any, socket: HubSocket): LayoutRoom {
-        const w = socket.suggestedWidth;
-        const h = socket.suggestedHeight;
-
-        // Center room on socket
-        const x = socket.x - Math.floor(w / 2);
-        const y = socket.y - Math.floor(h / 2);
-
-        // Create ports for entry and exit
-        const ports: Port[] = [];
-
-        // Entry port
-        const entryPort = this.createPortOnWall(socket.entryDirection, x, y, w, h, `port_${programRoom.id}_entry`);
-        ports.push(entryPort);
-
-        // Exit port (if different from entry)
-        if (socket.exitDirection !== socket.entryDirection) {
-            const exitPort = this.createPortOnWall(socket.exitDirection, x, y, w, h, `port_${programRoom.id}_exit`);
-            ports.push(exitPort);
-        }
-
-        return {
-            id: programRoom.id,
-            roomType: programRoom.roomType,
-            label: programRoom.label || programRoom.id,
-            x: x * CELL_SIZE,
-            y: y * CELL_SIZE,
-            width: w * CELL_SIZE,
-            height: h * CELL_SIZE,
-            gridX: x,
-            gridY: y,
-            gridWidth: w,
-            gridHeight: h,
-            zone: programRoom.zone || 'default',
-            ports,
-            isExterior: false
-        };
-    }
-
-    private createLeafRoom(programRoom: any, socket: LeafSocket): LayoutRoom {
-        const w = programRoom.estimatedWidth || socket.suggestedWidth;
-        const h = programRoom.estimatedHeight || socket.suggestedHeight;
-
-        let x = socket.x;
-        let y = socket.y;
-        let portWall: 'top' | 'bottom' | 'left' | 'right';
-
-        // Position room based on direction
-        switch (socket.direction) {
-            case 'top':
-                y = socket.y - h - 1;
-                portWall = 'bottom';
-                x = socket.x - Math.floor(w / 2);
-                break;
-            case 'bottom':
-                y = socket.y + 2;
-                portWall = 'top';
-                x = socket.x - Math.floor(w / 2);
-                break;
-            case 'left':
-                x = socket.x - w - 1;
+            if (side === -1) {
+                x = slot.x - gap - rw;
                 portWall = 'right';
-                y = socket.y - Math.floor(h / 2);
-                break;
-            case 'right':
-                x = socket.x + 2;
+            } else {
+                x = slot.x + gap + 1;
                 portWall = 'left';
-                y = socket.y - Math.floor(h / 2);
-                break;
+            }
+            const y = slot.y - Math.floor(rh / 2);
+
+            if (!this.isValid(x, y) || !this.isValid(x + rw, y + rh)) continue;
+
+            this.occupyGrid(x, y, rw, rh, 1);
+            const portX = (side === -1) ? (x + rw) : x;
+            const portY = slot.y;
+
+            const port: Port = {
+                id: `${roomData.id}_gate`,
+                x: portX * CELL_SIZE,
+                y: portY * CELL_SIZE,
+                wall: portWall,
+                connectorId: '',
+                doorType: this.determineDoorType(roomData)
+            };
+
+            rooms.push(this.createRoom(roomData, x, y, rw, rh, [port]));
+
+            // Connect to Spine
+            const path = this.findSmartPath(portX * CELL_SIZE, portY * CELL_SIZE, slot.x * CELL_SIZE, slot.y * CELL_SIZE);
+            connectors.push({
+                id: `conn_${roomData.id}`,
+                fromRoomId: roomData.id,
+                toRoomId: '',
+                kind: 'corridor',
+                path: path,
+                width: LEAF_WIDTH,
+                widthClass: 'standard'
+            });
+
+            side *= -1;
         }
-
-        const port = this.createPortOnWall(portWall, x, y, w, h, `port_${programRoom.id}_main`);
-
-        return {
-            id: programRoom.id,
-            roomType: programRoom.roomType,
-            label: programRoom.label || programRoom.id,
-            x: x * CELL_SIZE,
-            y: y * CELL_SIZE,
-            width: w * CELL_SIZE,
-            height: h * CELL_SIZE,
-            gridX: x,
-            gridY: y,
-            gridWidth: w,
-            gridHeight: h,
-            zone: programRoom.zone || 'default',
-            ports: [port],
-            isExterior: false
-        };
     }
 
-    private createPortOnWall(
-        wall: 'top' | 'bottom' | 'left' | 'right',
-        x: number, y: number, w: number, h: number,
-        portId: string
-    ): Port {
-        let px: number, py: number;
+    // ========================================================================
+    // STATION LAYOUT
+    // ========================================================================
 
-        switch (wall) {
-            case 'top':
-                px = (x + w / 2) * CELL_SIZE;
-                py = y * CELL_SIZE;
-                break;
-            case 'bottom':
-                px = (x + w / 2) * CELL_SIZE;
-                py = (y + h) * CELL_SIZE;
-                break;
-            case 'left':
-                px = x * CELL_SIZE;
-                py = (y + h / 2) * CELL_SIZE;
-                break;
-            case 'right':
-                px = (x + w) * CELL_SIZE;
-                py = (y + h / 2) * CELL_SIZE;
-                break;
+    private generateStationLayout(topology: any, rooms: LayoutRoom[], connectors: LayoutConnector[]) {
+        const cx = Math.floor(this.gridWidth / 2);
+        const cy = Math.floor(this.gridHeight / 2);
+        const safeRooms = topology.rooms || [];
+        const hubTypes = ['bridge', 'engineering', 'medbay', 'cargo', 'hangar', 'reactor'];
+        const hubRooms = safeRooms.filter((r: any) => hubTypes.some((t: string) => r.roomType?.toLowerCase().includes(t)));
+        const leafRooms = safeRooms.filter((r: any) => !hubRooms.includes(r));
+
+        console.log(`[SkeletonV2] Station: ${hubRooms.length} Hubs, ${leafRooms.length} Leaves`);
+
+        const centerRoomData = hubRooms.find((r: any) => ['reactor', 'command', 'bridge'].some((t: string) => r.roomType?.includes(t))) || hubRooms[0];
+        const ringHubs = hubRooms.filter((r: any) => r !== centerRoomData);
+
+        let centerRoom: LayoutRoom | undefined;
+
+        if (centerRoomData) {
+            const rw = this.getRoomDim(centerRoomData, 'width') + 2;
+            const rh = this.getRoomDim(centerRoomData, 'height') + 2;
+            const x = cx - Math.floor(rw / 2);
+            const y = cy - Math.floor(rh / 2);
+            this.occupyGrid(x, y, rw, rh, 1);
+            const ports = this.createPorts(centerRoomData.id, x, y, rw, rh, centerRoomData);
+            centerRoom = this.createRoom(centerRoomData, x, y, rw, rh, ports);
+            rooms.push(centerRoom);
         }
 
-        return {
-            id: portId,
-            x: px,
-            y: py,
-            wall,
-            connectorId: ''
-        };
-    }
+        const radius = Math.max(12, ringHubs.length * 4);
+        const angleStep = ringHubs.length > 0 ? (2 * Math.PI) / ringHubs.length : 0;
 
-    private createConnectorsForSegment(
-        segment: CorridorSegment,
-        placedHubs: PlacedHub[],
-        allRooms: LayoutRoom[]
-    ): LayoutConnector[] {
-        const connectors: LayoutConnector[] = [];
+        ringHubs.forEach((roomData: any, i: number) => {
+            const angle = i * angleStep;
+            const rCenterGridX = cx + Math.floor(Math.cos(angle) * radius);
+            const rCenterGridY = cy + Math.floor(Math.sin(angle) * radius);
+            const rw = this.getRoomDim(roomData, 'width');
+            const rh = this.getRoomDim(roomData, 'height');
+            const x = rCenterGridX - Math.floor(rw / 2);
+            const y = rCenterGridY - Math.floor(rh / 2);
 
-        // Find hubs that this segment connects through
-        const hubsOnSegment = placedHubs.filter(ph => {
-            const hx = ph.socket.x;
-            const hy = ph.socket.y;
+            this.occupyGrid(x, y, rw, rh, 1);
+            const ports = this.createPorts(roomData.id, x, y, rw, rh, roomData);
+            const hubRoom = this.createRoom(roomData, x, y, rw, rh, ports);
+            rooms.push(hubRoom);
 
-            // Check if hub is on this segment
-            if (segment.fromX === segment.toX) {
-                // Vertical segment
-                return hx === segment.fromX &&
-                    hy >= Math.min(segment.fromY, segment.toY) &&
-                    hy <= Math.max(segment.fromY, segment.toY);
-            } else {
-                // Horizontal segment
-                return hy === segment.fromY &&
-                    hx >= Math.min(segment.fromX, segment.toX) &&
-                    hx <= Math.max(segment.fromX, segment.toX);
+            if (centerRoom) {
+                const startPort = this.getBestPort(centerRoom, hubRoom.x + hubRoom.width / 2, hubRoom.y + hubRoom.height / 2);
+                const endPort = this.getBestPort(hubRoom, centerRoom.x + centerRoom.width / 2, centerRoom.y + centerRoom.height / 2);
+
+                const path = this.findSmartPath(startPort.x, startPort.y, endPort.x, endPort.y);
+                connectors.push({
+                    id: `spoke_${i}`,
+                    fromRoomId: centerRoomData.id,
+                    toRoomId: roomData.id,
+                    kind: 'corridor',
+                    path: path,
+                    width: SPINE_WIDTH,
+                    widthClass: 'wide'
+                });
             }
         });
 
-        // Sort hubs by position along segment
-        hubsOnSegment.sort((a, b) => {
-            if (segment.fromX === segment.toX) {
-                return a.socket.y - b.socket.y;
-            } else {
-                return a.socket.x - b.socket.x;
-            }
-        });
+        if (ringHubs.length > 1) {
+            for (let i = 0; i < ringHubs.length; i++) {
+                const r1 = rooms.find(r => r.id === ringHubs[i].id);
+                const r2 = rooms.find(r => r.id === ringHubs[(i + 1) % ringHubs.length].id);
+                if (r1 && r2) {
+                    const startPort = this.getBestPort(r1, r2.x + r2.width / 2, r2.y + r2.height / 2);
+                    const endPort = this.getBestPort(r2, r1.x + r1.width / 2, r1.y + r1.height / 2);
 
-        // Create corridor path, going through hubs
-        const path: Point[] = [];
-        let currentX = segment.fromX * CELL_SIZE;
-        let currentY = segment.fromY * CELL_SIZE;
-
-        path.push({ x: currentX, y: currentY });
-
-        // For now, simple straight segment (hubs will be "part of" the corridor visually)
-        path.push({ x: segment.toX * CELL_SIZE, y: segment.toY * CELL_SIZE });
-
-        connectors.push({
-            id: segment.id,
-            fromRoomId: hubsOnSegment.length > 0 ? hubsOnSegment[0].room.id : '',
-            toRoomId: hubsOnSegment.length > 1 ? hubsOnSegment[hubsOnSegment.length - 1].room.id : '',
-            kind: 'corridor',
-            path,
-            width: segment.width * CELL_SIZE
-        });
-
-        return connectors;
-    }
-
-    private createLeafConnector(
-        room: LayoutRoom,
-        existingConnectors: LayoutConnector[],
-        allRooms: LayoutRoom[]
-    ): LayoutConnector | null {
-        // Find room's port
-        if (room.ports.length === 0) return null;
-
-        const port = room.ports[0];
-
-        // Find nearest corridor
-        let nearestConnector: LayoutConnector | null = null;
-        let nearestDistance = Infinity;
-        let nearestPoint: Point | null = null;
-
-        for (const conn of existingConnectors) {
-            for (const pathPoint of conn.path) {
-                const dist = Math.abs(pathPoint.x - port.x) + Math.abs(pathPoint.y - port.y);
-                if (dist < nearestDistance) {
-                    nearestDistance = dist;
-                    nearestConnector = conn;
-                    nearestPoint = pathPoint;
+                    const path = this.findSmartPath(startPort.x, startPort.y, endPort.x, endPort.y);
+                    connectors.push({
+                        id: `ring_${i}`,
+                        fromRoomId: r1.id,
+                        toRoomId: r2.id,
+                        kind: 'corridor',
+                        path: path,
+                        width: LEAF_WIDTH,
+                        widthClass: 'standard'
+                    });
                 }
             }
         }
 
-        if (!nearestPoint || nearestDistance > 400) return null;
+        const hosts = ringHubs.length > 0 ? ringHubs : (centerRoomData ? [centerRoomData] : []);
+        const safeHosts = hosts.filter((h: any) => h !== undefined);
+        let hostIndex = 0;
 
-        // Create L-shaped path
-        const path: Point[] = [
-            { x: port.x, y: port.y }
-        ];
+        for (const leaf of leafRooms) {
+            if (safeHosts.length === 0) break;
+            const hostHub = safeHosts[hostIndex % safeHosts.length];
+            hostIndex++;
 
-        // Go horizontal first, then vertical
-        if (Math.abs(nearestPoint.x - port.x) > Math.abs(nearestPoint.y - port.y)) {
-            path.push({ x: nearestPoint.x, y: port.y });
-            path.push({ x: nearestPoint.x, y: nearestPoint.y });
-        } else {
-            path.push({ x: port.x, y: nearestPoint.y });
-            path.push({ x: nearestPoint.x, y: nearestPoint.y });
+            const hostRoom = rooms.find(r => r.id === hostHub.id);
+            if (!hostRoom) continue;
+
+            const vx = (hostRoom.gridX + hostRoom.gridWidth / 2) - cx;
+            const vy = (hostRoom.gridY + hostRoom.gridHeight / 2) - cy;
+            let dist = Math.sqrt(vx * vx + vy * vy);
+            let dirX = 0, dirY = 1;
+            if (dist < 0.1) {
+                const ang = (hostIndex * 1.5);
+                dirX = Math.cos(ang);
+                dirY = Math.sin(ang);
+            } else {
+                dirX = vx / dist;
+                dirY = vy / dist;
+            }
+
+            const rw = this.getRoomDim(leaf, 'width');
+            const rh = this.getRoomDim(leaf, 'height');
+            const distance = 8;
+
+            const leafCx = (hostRoom.gridX + hostRoom.gridWidth / 2) + Math.round(dirX * distance);
+            const leafCy = (hostRoom.gridY + hostRoom.gridHeight / 2) + Math.round(dirY * distance);
+            const x = leafCx - Math.floor(rw / 2);
+            const y = leafCy - Math.floor(rh / 2);
+
+            this.occupyGrid(x, y, rw, rh, 1);
+            const ports = this.createPorts(leaf.id, x, y, rw, rh, leaf);
+            const leafRoom = this.createRoom(leaf, x, y, rw, rh, ports);
+            rooms.push(leafRoom);
+
+            const startPort = this.getBestPort(hostRoom, leafRoom.x + leafRoom.width / 2, leafRoom.y + leafRoom.height / 2);
+            const endPort = this.getBestPort(leafRoom, hostRoom.x + hostRoom.width / 2, hostRoom.y + hostRoom.height / 2);
+
+            const path = this.findSmartPath(startPort.x, startPort.y, endPort.x, endPort.y);
+            connectors.push({
+                id: `leaf_cx_${leaf.id}`,
+                fromRoomId: hostHub.id,
+                toRoomId: leaf.id,
+                kind: 'corridor',
+                path: path,
+                width: LEAF_WIDTH,
+                widthClass: 'standard'
+            });
         }
+    }
 
+    // ========================================================================
+    // UTILS
+    // ========================================================================
+
+    private getRoomDim(data: any, prop: 'width' | 'height'): number {
+        let val = 0;
+        if (data.targetSize) val = data.targetSize[prop];
+        else if (data.minSize) val = data.minSize[prop];
+        else if (data.estimatedWidth && prop === 'width') val = data.estimatedWidth;
+        if (!val || val < 2) return 4;
+        return val;
+    }
+
+    private getBestPort(room: LayoutRoom, tx: number, ty: number): Port {
+        const cx = room.x + room.width / 2;
+        const cy = room.y + room.height / 2;
+        const dx = tx - cx;
+        const dy = ty - cy;
+        let wall: 'top' | 'bottom' | 'left' | 'right' = 'top';
+        if (Math.abs(dx) > Math.abs(dy)) wall = dx > 0 ? 'right' : 'left';
+        else wall = dy > 0 ? 'bottom' : 'top';
+        const port = room.ports.find(p => p.wall === wall);
+        if (port) return port;
+        return room.ports[0];
+    }
+
+    private determineDoorType(data: any): 'none' | 'standard' | 'secure' | 'bulkhead' | 'airlock' {
+        if (data.isExterior) return 'airlock';
+        if (data.accessLevel >= 3) return 'secure';
+        // Special cases by type
+        const type = (data.roomType || '').toLowerCase();
+        if (type.includes('hangar') || type.includes('cargo') || type.includes('engineering')) return 'bulkhead';
+        if (type.includes('bridge') || type.includes('armory') || type.includes('security')) return 'secure';
+
+        return 'standard';
+    }
+
+    private createRoom(data: any, x: number, y: number, w: number, h: number, ports: Port[]): LayoutRoom {
         return {
-            id: `conn_leaf_${room.id}`,
-            fromRoomId: room.id,
-            toRoomId: nearestConnector?.fromRoomId || '',
-            kind: 'corridor',
-            path,
-            width: CELL_SIZE
+            id: data.id,
+            roomType: data.roomType || 'general',
+            label: data.id,
+            x: x * CELL_SIZE,
+            y: y * CELL_SIZE,
+            width: w * CELL_SIZE,
+            height: h * CELL_SIZE,
+            gridX: x, gridY: y,
+            gridWidth: w, gridHeight: h,
+            ports,
+            zone: data.zone || 'general',
+            isExterior: !!data.isExterior,
+            tags: data.tags || []
         };
     }
 
-    private checkCollision(room: LayoutRoom, existingRooms: LayoutRoom[]): boolean {
-        const padding = 1; // 1 grid cell padding
+    private createPorts(id: string, x: number, y: number, w: number, h: number, roomData?: any): Port[] {
+        const doorType = roomData ? this.determineDoorType(roomData) : 'standard';
+        return [
+            { id: `${id}_t`, x: (x + w / 2) * CELL_SIZE, y: y * CELL_SIZE, wall: 'top', connectorId: '', doorType },
+            { id: `${id}_b`, x: (x + w / 2) * CELL_SIZE, y: (y + h) * CELL_SIZE, wall: 'bottom', connectorId: '', doorType },
+            { id: `${id}_l`, x: x * CELL_SIZE, y: (y + h / 2) * CELL_SIZE, wall: 'left', connectorId: '', doorType },
+            { id: `${id}_r`, x: (x + w) * CELL_SIZE, y: (y + h / 2) * CELL_SIZE, wall: 'right', connectorId: '', doorType },
+        ];
+    }
 
-        for (const other of existingRooms) {
-            if (room.gridX < other.gridX + other.gridWidth + padding &&
-                room.gridX + room.gridWidth + padding > other.gridX &&
-                room.gridY < other.gridY + other.gridHeight + padding &&
-                room.gridY + room.gridHeight + padding > other.gridY) {
-                return true;
+    private occupyGrid(x: number, y: number, w: number, h: number, val: number) {
+        for (let dy = 0; dy < h; dy++) {
+            for (let dx = 0; dx < w; dx++) {
+                if (this.isValid(x + dx, y + dy)) {
+                    this.grid[y + dy][x + dx] = val;
+                }
             }
         }
-        return false;
+    }
+
+    private createLPath(px1: number, py1: number, px2: number, py2: number): Point[] {
+        const path: Point[] = [];
+        path.push({ x: px1, y: py1 });
+        path.push({ x: px2, y: py1 });
+        path.push({ x: px2, y: py2 });
+        return path;
     }
 }
 
-// ============================================================================
-// ADAPTER FUNCTION
-// ============================================================================
-
-/**
- * Adapter to use SkeletonGeneratorV2 in the main pipeline
- */
 export function generateSkeletonLayoutV2(options: LayoutOptions): DeckLayout[] {
-    const { request, topology } = options;
-    const rng = createRNG(request.seed + '-skeletonV2');
-
-    const generator = new SkeletonGeneratorV2(rng);
-
-    // Calculate grid size
-    const totalTiles = topology.rooms.reduce((sum, r) => sum + r.estimatedTiles, 0);
-    const gridDimension = Math.ceil(Math.sqrt(totalTiles * 4.0)); // Extra space for hubs
-    const gridWidth = Math.max(40, gridDimension);
-    const gridHeight = Math.max(40, gridDimension);
-
-    // Generate skeleton
-    const skeleton = generator.generate(request, gridWidth, gridHeight);
-
-    // Place rooms
-    const placementProgram = { rooms: [...topology.rooms] };
-    const { rooms, connectors } = generator.placeRooms(skeleton, placementProgram);
-
-    // Create junctions at corridor intersections
-    const junctions = skeleton.junctions;
-
-    const layout: DeckLayout = {
-        deckIndex: 0,
-        gridWidth,
-        gridHeight,
-        rooms,
-        connectors,
-        junctions
-    };
-
-    return [layout];
+    const generator = new SkeletonGeneratorV2(createRNG(options.request.seed));
+    return generator.generate(options);
 }

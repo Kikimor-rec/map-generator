@@ -46,8 +46,7 @@ export const ROOM_CONFIGS: Record<string, RoomTypeConfig> = {
     countRules: [
       { archetype: 'ship', quantity: 1, priority: 10 },
       { archetype: 'station', quantity: { min: 1, max: 2 }, priority: 10 },
-      { archetype: 'outpost', quantity: 1, priority: 10 },
-      { archetype: 'capital', quantity: { min: 1, max: 2 }, priority: 10 }
+      { archetype: 'outpost', quantity: 1, priority: 10 }
     ],
     sizeByTier: sizeByTier(
       range(4, 6, '2:1'),
@@ -74,8 +73,7 @@ export const ROOM_CONFIGS: Record<string, RoomTypeConfig> = {
     countRules: [
       { archetype: 'ship', quantity: 1, priority: 10 },
       { archetype: 'station', quantity: { min: 1, max: 3 }, priority: 10 },
-      { archetype: 'outpost', quantity: 1, priority: 10 },
-      { archetype: 'capital', quantity: { min: 2, max: 4 }, priority: 10 }
+      { archetype: 'outpost', quantity: 1, priority: 10 }
     ],
     sizeByTier: sizeByTier(
       range(4, 6),
@@ -99,8 +97,7 @@ export const ROOM_CONFIGS: Record<string, RoomTypeConfig> = {
     countRules: [
       { archetype: 'ship', quantity: 1, priority: 9 },
       { archetype: 'station', quantity: { min: 1, max: 4 }, priority: 9 },
-      { archetype: 'outpost', quantity: 1, priority: 9 },
-      { archetype: 'capital', quantity: { min: 2, max: 4 }, priority: 9 }
+      { archetype: 'outpost', quantity: 1, priority: 9 }
     ],
     sizeByTier: sizeByTier(
       range(3, 5),
@@ -123,8 +120,7 @@ export const ROOM_CONFIGS: Record<string, RoomTypeConfig> = {
     countRules: [
       { archetype: 'ship', quantity: { min: 1, max: 2 }, priority: 8 },
       { archetype: 'station', quantity: { min: 1, max: 4 }, priority: 8 },
-      { archetype: 'outpost', quantity: 1, priority: 8 },
-      { archetype: 'capital', quantity: { min: 2, max: 6 }, priority: 8 }
+      { archetype: 'outpost', quantity: 1, priority: 8 }
     ],
     sizeByTier: sizeByTier(
       range(4, 8),
@@ -148,8 +144,7 @@ export const ROOM_CONFIGS: Record<string, RoomTypeConfig> = {
     countRules: [
       { archetype: 'ship', quantity: { min: 2, max: 8 }, priority: 6, scaleFactor: 0.15 },
       { archetype: 'station', quantity: { min: 4, max: 20 }, priority: 6, scaleFactor: 0.2 },
-      { archetype: 'outpost', quantity: { min: 2, max: 6 }, priority: 6, scaleFactor: 0.15 },
-      { archetype: 'capital', quantity: { min: 10, max: 40 }, priority: 6, scaleFactor: 0.3 }
+      { archetype: 'outpost', quantity: { min: 2, max: 6 }, priority: 6, scaleFactor: 0.15 }
     ],
     sizeByTier: sizeByTier(
       range(2, 4),
@@ -308,7 +303,7 @@ export const ROOM_CONFIGS: Record<string, RoomTypeConfig> = {
     label: 'Cargo Bay',
     description: 'Main cargo storage',
     countRules: [
-      { archetype: 'ship', subtype: 'cargo', quantity: { min: 2, max: 8 }, priority: 9 },
+      { archetype: 'ship', subtype: 'freighter', quantity: { min: 2, max: 8 }, priority: 9 },
       { archetype: 'ship', quantity: { min: 1, max: 4 }, priority: 5 },
       { archetype: 'station', quantity: { min: 2, max: 10 }, priority: 6 }
     ],
@@ -542,8 +537,7 @@ export const ROOM_CONFIGS: Record<string, RoomTypeConfig> = {
     label: 'Engine Room',
     description: 'Main propulsion systems',
     countRules: [
-      { archetype: 'ship', quantity: 1, priority: 9 },
-      { archetype: 'capital', quantity: { min: 2, max: 4 }, priority: 9 }
+      { archetype: 'ship', quantity: 1, priority: 9 }
     ],
     sizeByTier: sizeByTier(
       range(6, 12),
@@ -565,8 +559,7 @@ export const ROOM_CONFIGS: Record<string, RoomTypeConfig> = {
     description: 'Faster-than-light propulsion',
     countRules: [
       { archetype: 'ship', sizeTier: 'md', quantity: 1, priority: 7 },
-      { archetype: 'ship', sizeTier: 'lg', quantity: 1, priority: 8 },
-      { archetype: 'capital', quantity: { min: 1, max: 2 }, priority: 9 }
+      { archetype: 'ship', sizeTier: 'lg', quantity: 1, priority: 8 }
     ],
     sizeByTier: sizeByTier(
       undefined,
@@ -1002,50 +995,6 @@ export const ARCHETYPE_CONFIGS: Record<Archetype, ArchetypeConfig> = {
         bonusRooms: ['weaponBay', 'brig']
       }
     ]
-  },
-  capital: {
-    id: 'capital',
-    label: 'Capital Ship',
-    requiredCores: ['bridge', 'reactor', 'lifeSupport', 'engineRoom', 'ftlDrive'],
-    optionalRooms: ['quarters', 'messhall', 'medbay', 'storage', 'hangar', 'weaponBay'],
-    forbiddenRooms: [],
-    sizeTiers: ['lg', 'xl'],
-    subtypes: [
-      {
-        id: 'dreadnought',
-        label: 'Dreadnought',
-        additionalCores: ['weaponBay', 'securityStation'],
-        bonusRooms: ['brig', 'ammunition']
-      },
-      {
-        id: 'carrier',
-        label: 'Carrier',
-        additionalCores: ['hangar', 'flightControl'],
-        bonusRooms: ['briefingRoom', 'maintenance']
-      }
-    ]
-  },
-  bunker: {
-    id: 'bunker',
-    label: 'Bunker / Undeground Base',
-    requiredCores: ['bridge', 'reactor', 'lifeSupport'],
-    optionalRooms: ['quarters', 'storage', 'securityStation'],
-    forbiddenRooms: ['engineRoom', 'ftlDrive', 'navigation', 'observatory'],
-    sizeTiers: ['sm', 'md', 'lg'],
-    subtypes: [
-      {
-        id: 'command',
-        label: 'Command Bunker',
-        additionalCores: ['securityStation', 'serverRoom'],
-        bonusRooms: ['conferenceRoom']
-      },
-      {
-        id: 'vault',
-        label: 'Secure Vault',
-        additionalCores: ['storage', 'securityStation'],
-        bonusRooms: ['cargoBay']
-      }
-    ]
   }
 }
 
@@ -1063,13 +1012,13 @@ export function getRoomConfigsForContext(
 ): RoomTypeConfig[] {
   const result: RoomTypeConfig[] = []
   const archetypeConfig = ARCHETYPE_CONFIGS[archetype]
-
+  
   for (const config of Object.values(ROOM_CONFIGS)) {
     // Check if room is forbidden for this archetype
     if (archetypeConfig.forbiddenRooms.includes(config.id)) {
       continue
     }
-
+    
     // Check if any count rule applies
     const applicableRules = config.countRules.filter(rule => {
       if (rule.archetype !== archetype) return false
@@ -1077,12 +1026,12 @@ export function getRoomConfigsForContext(
       if (rule.sizeTier && sizeTier && rule.sizeTier !== sizeTier) return false
       return true
     })
-
+    
     if (applicableRules.length > 0) {
       result.push(config)
     }
   }
-
+  
   return result
 }
 
@@ -1100,16 +1049,16 @@ export function getCountRange(
   if (!config) {
     return { min: 0, max: 0, priority: 0 }
   }
-
+  
   // Find best matching rule
   let bestRule: CountRule | null = null
   let bestScore = -1
-
+  
   for (const rule of config.countRules) {
     if (rule.archetype !== archetype) continue
-
+    
     let score = 1
-
+    
     // Exact subtype match is worth more
     if (rule.subtype) {
       if (rule.subtype === subtype) {
@@ -1118,7 +1067,7 @@ export function getCountRange(
         continue // Wrong subtype
       }
     }
-
+    
     // Exact sizeTier match is worth more
     if (rule.sizeTier) {
       if (rule.sizeTier === sizeTier) {
@@ -1127,33 +1076,33 @@ export function getCountRange(
         continue // Wrong size tier
       }
     }
-
+    
     if (score > bestScore) {
       bestScore = score
       bestRule = rule
     }
   }
-
+  
   if (!bestRule) {
     return { min: 0, max: 0, priority: 0 }
   }
-
+  
   let min: number
   let max: number
-
+  
   if (typeof bestRule.quantity === 'number') {
     min = max = bestRule.quantity
   } else {
     min = bestRule.quantity.min
     max = bestRule.quantity.max
   }
-
+  
   // Apply scale factor if present
   if (bestRule.scaleFactor && totalRooms) {
     const scaled = Math.floor(totalRooms * bestRule.scaleFactor)
     max = Math.min(max, scaled)
   }
-
+  
   return { min, max, priority: bestRule.priority }
 }
 
@@ -1166,17 +1115,17 @@ export function getSizeRange(
 ): { minTiles: number; maxTiles: number; ratio: string } | null {
   const config = ROOM_CONFIGS[roomType]
   if (!config) return null
-
+  
   const tierSize = config.sizeByTier[sizeTier]
   if (!tierSize) {
     // Fallback to closest available tier
     const tiers: SizeTier[] = ['xs', 'sm', 'md', 'lg', 'xl']
     const tierIndex = tiers.indexOf(sizeTier)
-
+    
     for (let offset = 1; offset < tiers.length; offset++) {
       const lowerTier = tiers[tierIndex - offset]
       const upperTier = tiers[tierIndex + offset]
-
+      
       if (lowerTier && config.sizeByTier[lowerTier]) {
         return config.sizeByTier[lowerTier]!
       }
@@ -1184,9 +1133,9 @@ export function getSizeRange(
         return config.sizeByTier[upperTier]!
       }
     }
-
+    
     return null
   }
-
+  
   return tierSize
 }

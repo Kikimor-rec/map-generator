@@ -453,8 +453,8 @@ export class SkeletonGenerator {
         if (request.archetype === 'outpost') {
             return this.generateClusterSkeleton(gridWidth, gridHeight);
         }
-        if (request.archetype === 'capital' || request.archetype === 'bunker' || (request.archetype === 'ship' && request.sizeTier === 'lg')) {
-            // Large ships, capital ships, and bunkers use a grid layout
+        // Large ships use a grid layout
+        if (request.archetype === 'ship' && (request.sizeTier === 'lg' || request.sizeTier === 'xl')) {
             return this.generateGridSkeleton(gridWidth, gridHeight);
         }
         // Default to Linear Spine

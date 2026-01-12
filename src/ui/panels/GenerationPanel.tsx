@@ -56,6 +56,8 @@ const STYLE_PROFILES: Array<{ value: StyleProfile; label: string }> = [
   { value: 'industrial', label: 'Industrial' },
   { value: 'organic', label: 'Organic' },
   { value: 'alien', label: 'Alien' },
+  { value: 'realism', label: 'Realism' },
+  { value: 'futurism', label: 'Futurism' },
 ]
 
 const QUALITY_MODES: Array<{ value: QualityMode; label: string; description: string }> = [
@@ -79,7 +81,10 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
 
   // Quality mode
   const [qualityMode, setQualityMode] = useState<QualityMode>('standard')
-  const [useQualityPipeline, setUseQualityPipeline] = useState(true)
+  const [useQualityPipeline, setUseQualityPipeline] = useState(false) // Disabled by default to use new grid generator
+
+  // Generator engine
+  const [generatorEngine, setGeneratorEngine] = useState<'grid' | 'legacy'>('grid')
 
   // Advanced routing options
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -87,6 +92,18 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   const [bendPenalty, setBendPenalty] = useState(DEFAULT_ROUTING_COSTS.bendPenalty)
   const [reuseBonus, setReuseBonus] = useState(DEFAULT_ROUTING_COSTS.reuseBonus)
   const [crossingPenalty, setCrossingPenalty] = useState(DEFAULT_ROUTING_COSTS.crossingPenalty)
+
+  // Gallery mode - generate multiple variants
+  const [galleryMode, setGalleryMode] = useState(false)
+  const [variantCount, setVariantCount] = useState(4)
+  const [variants, setVariants] = useState<Array<{
+    seed: string
+    score: number
+    roomCount: number
+    corridorCount: number
+    data: ReturnType<typeof convertToEditorFormat> | null
+  }>>([])
+  const [selectedVariant, setSelectedVariant] = useState<number | null>(null)
 
   // Generation state
   const [genState, setGenState] = useState<GenerationState>({
@@ -165,6 +182,14 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     setPlainStatus(null)
 
     const useSeed = seed.trim() || generateRandomSeed()
+    
+    // Capture routing options for use in callback
+    const routingOptions = {
+      coalesceEnabled,
+      bendPenalty,
+      reuseBonus,
+      crossingPenalty,
+    }
 
     // Initialize Worker
     if (workerRef.current) {
@@ -222,7 +247,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
 
               if (mapData.bestCandidate.data.mapData) {
                 const md = mapData.bestCandidate.data.mapData;
-                editorData = convertToEditorFormat(md, 0);
+                editorData = convertToEditorFormat(md, 0, routingOptions);
                 name = md.meta.name;
                 description = `${md.meta.archetype} - ${md.meta.subtype}`;
                 metaData = {
@@ -230,7 +255,8 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   seed: useSeed,
                   archetype, subtype, qualityMode,
                   candidatesEvaluated: mapData.candidatesEvaluated,
-                  score: mapData.bestCandidate.score
+                  score: mapData.bestCandidate.score,
+                  ttrpgMetrics: md.meta.ttrpgMetrics
                 };
               } else {
                 // Fallback if mapData missing
@@ -238,13 +264,14 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               }
 
             } else { // Standard MapJSON
-              editorData = convertToEditorFormat(mapData, 0);
+              editorData = convertToEditorFormat(mapData, 0, routingOptions);
               name = mapData.meta.name;
               description = `${mapData.meta.archetype} - ${mapData.meta.subtype}`;
               metaData = {
                 generator: 'procedural',
                 seed: useSeed,
-                archetype, subtype
+                archetype, subtype,
+                ttrpgMetrics: mapData.meta.ttrpgMetrics
               };
             }
 
@@ -310,7 +337,14 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
           loopiness,
           danger,
           useQuality: useQualityPipeline,
-          qualityMode
+          qualityMode,
+          engine: generatorEngine,
+          routing: {
+            coalesceEnabled,
+            bendPenalty,
+            reuseBonus,
+            crossingPenalty,
+          }
         }
       });
 
@@ -318,7 +352,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       setGenState(s => ({ ...s, isGenerating: false, error: error.message }));
     }
 
-  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, useQualityPipeline, qualityMode, dispatch, onClose, generateRandomSeed])
+  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, useQualityPipeline, qualityMode, generatorEngine, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, dispatch, onClose, generateRandomSeed])
 
   const handleCancel = useCallback(() => {
     if (workerRef.current) {
@@ -327,12 +361,117 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     setGenState(s => ({ ...s, isGenerating: false, error: 'Cancelled' }));
   }, []);
 
+  // Generate multiple variants for gallery
+  const handleGenerateGallery = useCallback(async () => {
+    setVariants([])
+    setSelectedVariant(null)
+    setGenState(s => ({ ...s, isGenerating: true, error: null, progress: 0 }))
+
+    const routingOptions = { coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty }
+    const newVariants: typeof variants = []
+
+    // Use setTimeout to yield to UI thread between generations
+    const generateVariant = (index: number): Promise<void> => {
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          const variantSeed = seed.trim() 
+            ? `${seed}-${index + 1}` 
+            : Math.random().toString(36).substring(2, 10).toUpperCase()
+
+          try {
+            const options: GeneratorOptions = {
+              seed: variantSeed,
+              archetype,
+              subtype,
+              sizeTier,
+              styleProfile,
+              loopiness,
+              danger,
+              engine: generatorEngine,
+              routing: routingOptions,
+            }
+            
+            const result = generateMap(options)
+            if (!result.success || !result.map) {
+              throw new Error(result.issues.map(i => i.message).join(', ') || 'Generation failed')
+            }
+            
+            const editorData = convertToEditorFormat(result.map, 0, routingOptions)
+            
+            const roomCount = editorData.rooms.length
+            const corridorCount = editorData.corridors.length
+            const connectivityRatio = corridorCount > 0 ? roomCount / corridorCount : 0
+            const simpleScore = roomCount * 10 - Math.abs(connectivityRatio - 1.5) * 5
+
+            newVariants.push({
+              seed: variantSeed,
+              score: simpleScore,
+              roomCount,
+              corridorCount,
+              data: editorData,
+            })
+          } catch (err: any) {
+            console.warn(`Variant ${index + 1} failed:`, err.message)
+          }
+          
+          setGenState(s => ({ ...s, progress: ((index + 1) / variantCount) * 100 }))
+          resolve()
+        }, 10) // Small delay to let UI update
+      })
+    }
+
+    // Generate variants sequentially with UI updates
+    for (let i = 0; i < variantCount; i++) {
+      await generateVariant(i)
+    }
+
+    // Sort by score (higher is better)
+    newVariants.sort((a, b) => b.score - a.score)
+    setVariants(newVariants)
+    setGenState(s => ({ ...s, isGenerating: false, progress: 100 }))
+  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, generatorEngine, variantCount, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty])
+
+  // Apply selected variant
+  const handleApplyVariant = useCallback((index: number) => {
+    const variant = variants[index]
+    if (!variant?.data) return
+
+    const config = ARCHETYPE_CONFIGS[archetype]
+    const name = `${config.label} (${variant.seed})`
+
+    const newDeck = {
+      id: crypto.randomUUID(),
+      name: 'Deck 1',
+      level: 1,
+      rooms: variant.data.rooms,
+      corridors: variant.data.corridors,
+    }
+
+    const newProject = {
+      id: crypto.randomUUID(),
+      name,
+      description: `Generated ${archetype} - Variant ${index + 1}`,
+      version: '1.0.0',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      gridSize: 40,
+      decks: [newDeck],
+      layers: [...DEFAULT_LAYERS],
+      theme: MAP_THEMES[MapThemeId.Blueprint],
+      metadata: { seed: variant.seed, score: variant.score },
+    }
+
+    dispatch(actions.loadProject(newProject))
+    setGenState(s => ({ ...s, lastSeed: variant.seed }))
+    onClose()
+  }, [variants, archetype, dispatch, onClose])
+
 
   if (!isOpen) return null
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-      <div className="panel w-[720px] max-h-[90vh] overflow-hidden flex flex-col">
+      <div className="panel w-[720px] max-h-[85vh] overflow-hidden flex flex-col">
         <div className="panel-header flex items-center justify-between">
           <span>Map Generator</span>
           <button onClick={onClose} className="text-space-400 hover:text-white">
@@ -479,6 +618,39 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                       </p>
                     </>
                   )}
+                </div>
+
+                {/* Gallery Mode Toggle */}
+                <div className="space-y-1">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={galleryMode}
+                      onChange={e => setGalleryMode(e.target.checked)}
+                      className="w-4 h-4 accent-cyber-blue"
+                    />
+                    <span className="text-sm text-space-200">Gallery mode</span>
+                  </label>
+                  {galleryMode && (
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="text-xs text-space-400">Variants:</span>
+                      {[2, 4, 6, 8].map(n => (
+                        <button
+                          key={n}
+                          onClick={() => setVariantCount(n)}
+                          className={`px-2 py-1 text-xs rounded ${variantCount === n
+                            ? 'bg-cyber-blue text-white'
+                            : 'bg-space-700 text-space-300 hover:bg-space-600'
+                          }`}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-xs text-space-500">
+                    {galleryMode ? `Generate ${variantCount} variants to compare` : 'Generate single map'}
+                  </p>
                 </div>
 
                 {/* Loopiness Slider */}
@@ -654,20 +826,54 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
             )}
 
             {/* Simple status for non-quality runs */}
-            {genState.isGenerating && !useQualityPipeline && (
-              <div className="p-3 bg-space-800 border border-space-600 rounded space-y-2 text-sm text-space-300">
-                <div className="flex justify-between">
-                  <span>{plainStatus || 'Generating...'}</span>
-                  <span className="text-cyber-blue font-mono">{genState.progress.toFixed(0)}%</span>
+            {genState.isGenerating && !useQualityPipeline && !galleryMode && (
+              <div className="p-3 bg-space-800 border border-cyber-blue/30 rounded space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 bg-cyber-blue rounded-full animate-pulse" />
+                    <span className="text-space-200 font-medium">{plainStatus || 'Generating...'}</span>
+                  </div>
+                  <span className="text-cyber-blue font-mono text-sm">{genState.progress.toFixed(0)}%</span>
                 </div>
                 <div className="h-2 bg-space-700 rounded overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-cyber-blue to-cyber-pink transition-all duration-300"
-                    style={{ width: `${Math.max(15, genState.progress)}%` }}
+                    className="h-full bg-gradient-to-r from-cyber-blue via-cyber-purple to-cyber-pink transition-all duration-500 ease-out"
+                    style={{ width: `${Math.max(10, genState.progress)}%` }}
                   />
                 </div>
-                <div className="text-xs text-space-500">
-                  Rooms/layout/routing... {showSlowIndicator ? '(still running)' : ''}
+                {/* Stage indicators */}
+                <div className="flex justify-between text-xs text-space-500">
+                  <span className={genState.progress >= 10 ? 'text-cyber-blue' : ''}>Rooms</span>
+                  <span className={genState.progress >= 25 ? 'text-cyber-blue' : ''}>Graph</span>
+                  <span className={genState.progress >= 45 ? 'text-cyber-blue' : ''}>Layout</span>
+                  <span className={genState.progress >= 65 ? 'text-cyber-blue' : ''}>Corridors</span>
+                  <span className={genState.progress >= 85 ? 'text-cyber-blue' : ''}>Done</span>
+                </div>
+              </div>
+            )}
+
+            {/* Gallery mode progress */}
+            {genState.isGenerating && galleryMode && (
+              <div className="p-3 bg-space-800 border border-space-600 rounded space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-space-300">
+                    Generating variant {Math.ceil(genState.progress / 100 * variantCount)} of {variantCount}...
+                  </span>
+                  <span className="text-cyber-blue font-mono">
+                    {genState.progress.toFixed(0)}%
+                  </span>
+                </div>
+                <div className="h-2 bg-space-700 rounded overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-cyber-purple to-cyber-pink transition-all duration-300"
+                    style={{ width: `${genState.progress}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between text-xs text-space-500">
+                  <span className="flex items-center gap-2">
+                    <span className="inline-block w-2 h-2 bg-cyber-blue rounded-full animate-pulse" />
+                    Please wait...
+                  </span>
                 </div>
               </div>
             )}
@@ -681,11 +887,60 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
             )}
 
             {/* Success info */}
-            {genState.lastSeed && !genState.error && !genState.isGenerating && (
+            {genState.lastSeed && !genState.error && !genState.isGenerating && !galleryMode && (
               <div className="p-3 bg-green-900/30 border border-green-700 rounded text-green-400 text-sm">
                 Done! Seed: <span className="font-mono">{genState.lastSeed}</span>
                 {genState.lastTiming && (
                   <span className="text-green-500 ml-2">({genState.lastTiming.toFixed(0)}ms)</span>
+                )}
+              </div>
+            )}
+
+            {/* Gallery of Variants */}
+            {galleryMode && variants.length > 0 && !genState.isGenerating && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-space-200">
+                    Generated Variants ({variants.length})
+                  </h3>
+                  <span className="text-xs text-space-400">Click to select, double-click to apply</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+                  {variants.map((v, i) => (
+                    <div
+                      key={v.seed}
+                      onClick={() => setSelectedVariant(i)}
+                      onDoubleClick={() => handleApplyVariant(i)}
+                      className={`p-3 rounded border cursor-pointer transition-all ${
+                        selectedVariant === i
+                          ? 'bg-space-700 border-cyber-blue'
+                          : 'bg-space-800 border-space-600 hover:border-space-500'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <span className="text-xs font-mono text-cyber-blue">{v.seed}</span>
+                        {i === 0 && (
+                          <span className="text-[10px] bg-cyber-green/20 text-cyber-green px-1 rounded">
+                            Best
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-space-300">
+                        {v.roomCount} rooms, {v.corridorCount} corridors
+                      </div>
+                      <div className="text-xs text-space-500">
+                        Score: {v.score.toFixed(2)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {selectedVariant !== null && (
+                  <button
+                    onClick={() => handleApplyVariant(selectedVariant)}
+                    className="w-full btn btn-cyber"
+                  >
+                    Apply Variant {selectedVariant + 1}
+                  </button>
                 )}
               </div>
             )}
@@ -697,13 +952,23 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
           <button onClick={onClose} className="btn btn-secondary">
             Cancel
           </button>
-          <button
-            onClick={handleGenerate}
-            className="btn btn-cyber"
-            disabled={genState.isGenerating}
-          >
-            {genState.isGenerating ? 'Generating...' : 'Generate'}
-          </button>
+          {galleryMode ? (
+            <button
+              onClick={handleGenerateGallery}
+              className="btn btn-cyber"
+              disabled={genState.isGenerating}
+            >
+              {genState.isGenerating ? 'Generating...' : `Generate ${variantCount} Variants`}
+            </button>
+          ) : (
+            <button
+              onClick={handleGenerate}
+              className="btn btn-cyber"
+              disabled={genState.isGenerating}
+            >
+              {genState.isGenerating ? 'Generating...' : 'Generate'}
+            </button>
+          )}
         </div>
       </div >
     </div >

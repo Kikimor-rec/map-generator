@@ -680,12 +680,47 @@ export const DEFAULT_LAYERS: Layer[] = [
 // Map / Project
 // ============================================================================
 
+/**
+ * Junction where corridors meet (T, X, hub, etc.)
+ */
+export interface CorridorJunction {
+  id: string
+  position: Point
+  kind: 'T' | 'X' | 'hub' | 'airlockChamber'
+  /** IDs of corridors connected at this junction */
+  corridorIds: string[]
+  /** Optional: is this a security checkpoint? */
+  isCheckpoint?: boolean
+  /** Optional: bulkhead door */
+  isBulkhead?: boolean
+}
+
+/**
+ * Line jump - visual crossing of corridors without connection
+ */
+export interface CorridorLineJump {
+  id: string
+  position: Point
+  /** Corridor ID that goes "over" (continuous) */
+  topCorridorId: string
+  /** Corridor ID that goes "under" (has gap/arc) */
+  bottomCorridorId: string
+  /** Visual style */
+  style: 'arc' | 'gap' | 'sharp'
+  /** Size of the jump arc/gap in pixels */
+  size: number
+}
+
 export interface Deck {
   id: string
   name: string
   level: number
   rooms: Room[]
   corridors: Corridor[]
+  /** Junctions where corridors meet */
+  junctions?: CorridorJunction[]
+  /** Line jumps where corridors cross without connecting */
+  lineJumps?: CorridorLineJump[]
 }
 
 export interface MapProject {

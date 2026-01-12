@@ -5,7 +5,7 @@
 
 // Main generator
 export { generateMap, convertToEditorFormat } from './generator'
-export type { GeneratorOptions, GenerationResult, EditorMapData } from './generator'
+export type { GeneratorOptions, GenerationResult, EditorMapData, RoutingOptions } from './generator'
 
 // Types
 export type {

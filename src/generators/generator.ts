@@ -36,13 +36,24 @@ import { createRNG } from './rng'
 import { generateRoomProgram, validateRoomProgram } from './roomProgram'
 import { generateTopology, validateTopology } from './topology'
 import { generateLayout, validateLayout } from './layout'
-import { generateSkeletonLayout } from './skeletonGenerator'
 import { coalesceCorridors } from '@core/corridorCoalesce'
-import { DEFAULT_COALESCE_SETTINGS } from '@core/corridorTypes'
+import { DEFAULT_COALESCE_SETTINGS, type CoalesceSettings, type RoutingCostConfig, DEFAULT_ROUTING_COSTS } from '@core/corridorTypes'
+import { generateGridMap } from './gridGenerator'
 
 // ============================================================================
 // GENERATOR OPTIONS
 // ============================================================================
+
+export interface RoutingOptions {
+  /** Enable corridor coalescing (merge overlapping segments) */
+  coalesceEnabled?: boolean
+  /** Penalty for each bend in the path */
+  bendPenalty?: number
+  /** Bonus (negative) for reusing existing corridor segments */
+  reuseBonus?: number
+  /** Penalty for crossing other corridors */
+  crossingPenalty?: number
+}
 
 export interface GeneratorOptions {
   /** Random seed for reproducibility */
@@ -61,6 +72,10 @@ export interface GeneratorOptions {
   danger?: number
   /** Skip validation for faster generation */
   skipValidation?: boolean
+  /** Advanced routing options */
+  routing?: RoutingOptions
+  /** Generation engine: 'legacy' (skeleton-first) or 'grid' (tile-based) */
+  engine?: 'legacy' | 'grid'
 }
 
 // ============================================================================
@@ -75,7 +90,14 @@ const DEFAULT_OPTIONS: Required<GeneratorOptions> = {
   sizeTier: 'md',
   loopiness: 0.5,
   danger: 0.3,
-  skipValidation: false
+  skipValidation: false,
+  routing: {
+    coalesceEnabled: true,
+    bendPenalty: DEFAULT_ROUTING_COSTS.bendPenalty,
+    reuseBonus: DEFAULT_ROUTING_COSTS.reuseBonus,
+    crossingPenalty: DEFAULT_ROUTING_COSTS.crossingPenalty,
+  },
+  engine: 'grid', // New default: use grid-based generator
 }
 
 // ============================================================================
@@ -109,6 +131,13 @@ export interface GenerationResult {
  * Generate a complete map based on the provided options
  */
 export function generateMap(options: GeneratorOptions = {}): GenerationResult {
+  // Use grid generator if selected
+  const engine = options.engine ?? DEFAULT_OPTIONS.engine
+  if (engine === 'grid') {
+    return generateMapWithGridEngine(options)
+  }
+
+  // Legacy generator
   const startTime = performance.now()
   const timing = {
     total: 0,
@@ -122,13 +151,13 @@ export function generateMap(options: GeneratorOptions = {}): GenerationResult {
 
   // Normalize options with defaults
   const request = normalizeRequest(options)
-
+  
   try {
     // Stage 2: Generate Room Program
     const roomProgramStart = performance.now()
     const roomProgram = generateRoomProgram({ request })
     timing.roomProgram = performance.now() - roomProgramStart
-
+    
     // Validate room program
     if (!options.skipValidation) {
       const validation = validateRoomProgram(roomProgram, request)
@@ -142,12 +171,12 @@ export function generateMap(options: GeneratorOptions = {}): GenerationResult {
         }
       }
     }
-
+    
     // Stage 3: Generate Topology Graph
     const topologyStart = performance.now()
     const topology = generateTopology({ request, program: roomProgram })
     timing.topology = performance.now() - topologyStart
-
+    
     // Validate topology
     if (!options.skipValidation) {
       const validation = validateTopology(topology)
@@ -161,34 +190,18 @@ export function generateMap(options: GeneratorOptions = {}): GenerationResult {
         }
       }
     }
-
+    
     // Stage 4-5: Generate Layout Geometry
     const layoutStart = performance.now()
-
-    let layouts: DeckLayout[];
-
-    // EXPERIMENTAL: Use Skeleton Generator for 'explorer' subtype or if explicitly requested
-    // For prototype testing, we'll force it for now if archetype is 'ship'
-    if (request.archetype === 'ship' || request.archetype === 'station' || request.archetype === 'outpost'
-      || request.archetype === 'capital' || request.archetype === 'bunker'
-      || request.subtype === 'explorer') {
-      console.log(`Using Skeleton Generator for ${request.archetype}/${request.subtype}`);
-      const skelStart = performance.now();
-      layouts = generateSkeletonLayout({ request, topology });
-      console.log(`Skeleton Gen took ${performance.now() - skelStart}ms`);
-    } else {
-      console.log(`Using Standard Layout for ${request.archetype}`);
-      layouts = generateLayout({ request, topology });
-    }
-
+    const layouts = generateLayout({ request, topology })
     timing.layout = performance.now() - layoutStart
-
+    
     // Validate layout
     if (!options.skipValidation) {
       const validationStart = performance.now()
       const validation = validateLayout(layouts)
       timing.validation = performance.now() - validationStart
-
+      
       if (!validation.valid) {
         for (const issue of validation.issues) {
           issues.push({
@@ -199,12 +212,12 @@ export function generateMap(options: GeneratorOptions = {}): GenerationResult {
         }
       }
     }
-
+    
     // Stage 7: Build final MapJSON
     const map = buildMapJSON(request, roomProgram, topology, layouts)
-
+    
     timing.total = performance.now() - startTime
-
+    
     return {
       success: true,
       map,
@@ -214,16 +227,16 @@ export function generateMap(options: GeneratorOptions = {}): GenerationResult {
       issues,
       timing
     }
-
+    
   } catch (error) {
     timing.total = performance.now() - startTime
-
+    
     issues.push({
       severity: 'error',
       stage: 'generator',
       message: error instanceof Error ? error.message : String(error)
     })
-
+    
     return {
       success: false,
       issues,
@@ -261,7 +274,7 @@ function buildMapJSON(
   const meta = buildMeta(request, program, topology)
   const grid = { cellSize: 40, snapEnabled: true }
   const zones = buildZones(program)
-
+  
   return {
     version: '1.0.0',
     meta,
@@ -285,7 +298,7 @@ function buildMeta(
   topology: TopologyGraph
 ): MapMeta {
   const rng = createRNG(request.seed + '-name')
-
+  
   return {
     name: generateName(request, rng),
     archetype: request.archetype,
@@ -302,32 +315,30 @@ function generateName(request: GenerationRequest, rng: { pick: <T>(arr: T[]) => 
   const prefixes: Record<Archetype, string[]> = {
     ship: ['ISS', 'USS', 'HMS', 'CSV', 'NSV'],
     station: ['Station', 'Orbital', 'Habitat', 'Port'],
-    outpost: ['Base', 'Outpost', 'Facility', 'Site'],
-    capital: ['Flagship', 'Dreadnought', 'Carrier', 'Titan'],
-    bunker: ['Vault', 'Bunker', 'Silo', 'Complex']
+    outpost: ['Base', 'Outpost', 'Facility', 'Site']
   }
-
+  
   const names = [
     'Horizon', 'Vanguard', 'Pioneer', 'Endeavour', 'Prometheus',
     'Artemis', 'Helios', 'Nova', 'Zenith', 'Eclipse',
     'Aurora', 'Stellar', 'Nebula', 'Cosmos', 'Orion'
   ]
-
+  
   const prefix = rng.pick(prefixes[request.archetype])
   const name = rng.pick(names)
-
+  
   return `${prefix} ${name}`
 }
 
 function buildTTRPGMetrics(program: RoomProgram, topology: TopologyGraph): TTRPGMetrics {
   const primaryRooms = program.rooms.filter(r => r.importance === 'primary')
-
+  
   // Estimate combat encounters based on room count
   const combatEncounters = Math.floor(program.totalRooms / 8) + 1
-
+  
   // Exploration time estimate (minutes per room roughly)
   const explorationMinutes = program.totalRooms * 5
-
+  
   return {
     totalRooms: program.totalRooms,
     totalConnectors: topology.connectors.length,
@@ -346,9 +357,9 @@ function buildZones(program: RoomProgram): Array<{ id: string; label: string; co
     cargo: '#f59e0b',     // Amber
     special: '#8b5cf6'    // Purple
   }
-
+  
   const zones: Array<{ id: string; label: string; color: string }> = []
-
+  
   for (const [zone, count] of Object.entries(program.zoneDistribution)) {
     if (count > 0) {
       zones.push({
@@ -358,7 +369,7 @@ function buildZones(program: RoomProgram): Array<{ id: string; label: string; co
       })
     }
   }
-
+  
   return zones
 }
 
@@ -368,27 +379,27 @@ function buildTags(request: GenerationRequest, program: RoomProgram): string[] {
     request.subtype,
     request.sizeTier
   ]
-
+  
   // Add descriptive tags
   if (request.loopiness !== undefined && request.loopiness > 0.7) {
     tags.push('labyrinthine')
   } else if (request.loopiness !== undefined && request.loopiness < 0.3) {
     tags.push('linear')
   }
-
+  
   if (request.danger !== undefined && request.danger > 0.7) {
     tags.push('high-danger')
   }
-
+  
   // Add room-based tags
   const hasWeapons = program.rooms.some(r => r.tags.includes('military'))
   const hasScience = program.rooms.some(r => r.tags.includes('science'))
   const hasCargo = program.rooms.some(r => r.tags.includes('cargo'))
-
+  
   if (hasWeapons) tags.push('armed')
   if (hasScience) tags.push('research-capable')
   if (hasCargo) tags.push('cargo-hauler')
-
+  
   return tags
 }
 
@@ -405,12 +416,24 @@ export interface EditorMapData {
 /**
  * Convert generated MapJSON to editor-compatible format
  */
-export function convertToEditorFormat(mapJson: MapJSON, deckIndex = 0): EditorMapData {
+export function convertToEditorFormat(
+  mapJson: MapJSON, 
+  deckIndex = 0,
+  routingOptions?: RoutingOptions
+): EditorMapData {
   const deck = mapJson.decks[deckIndex]
   if (!deck) {
     return { rooms: [], corridors: [], doors: [] }
   }
-
+  
+  // Merge routing options with defaults
+  const routing = {
+    coalesceEnabled: routingOptions?.coalesceEnabled ?? true,
+    bendPenalty: routingOptions?.bendPenalty ?? DEFAULT_ROUTING_COSTS.bendPenalty,
+    reuseBonus: routingOptions?.reuseBonus ?? DEFAULT_ROUTING_COSTS.reuseBonus,
+    crossingPenalty: routingOptions?.crossingPenalty ?? DEFAULT_ROUTING_COSTS.crossingPenalty,
+  }
+  
   // Convert rooms to core Room type
   const rooms: Room[] = deck.rooms.map(layoutRoom => {
     const roomType = mapRoomTypeId(layoutRoom.roomType)
@@ -437,7 +460,7 @@ export function convertToEditorFormat(mapJson: MapJSON, deckIndex = 0): EditorMa
       isLocked: false
     }
   })
-
+  
   // Convert connectors to core Corridor type
   const corridors: Corridor[] = deck.connectors.map(connector => {
     // Accept both legacy MapJSON path and quality-pipeline waypoints-only connectors
@@ -448,28 +471,28 @@ export function convertToEditorFormat(mapJson: MapJSON, deckIndex = 0): EditorMa
     // Convert path to segments
     const segments: CorridorSegment[] = (connector as any).segments
       ? (connector as any).segments.map((s: any) => ({
-        start: { x: s.start.x, y: s.start.y },
-        end: { x: s.end.x, y: s.end.y }
-      }))
+          start: { x: s.start.x, y: s.start.y },
+          end: { x: s.end.x, y: s.end.y }
+        }))
       : path.slice(0, -1).map((p: any, i: number) => ({
-        start: { x: p.x, y: p.y },
-        end: { x: path[i + 1].x, y: path[i + 1].y }
-      }))
-
+          start: { x: p.x, y: p.y },
+          end: { x: path[i + 1].x, y: path[i + 1].y }
+        }))
+    
     // Find attachments
     const startAttachment = path.length > 0
       ? findRoomAttachment(fromRoomId, path[0], rooms)
       : undefined
-    const endAttachment = path.length > 0
+    const endAttachment = path.length > 0 
       ? findRoomAttachment(toRoomId, path[path.length - 1], rooms)
       : undefined
-
+    
     return {
       id: connector.id,
       style: CorridorStyleEnum.Standard,
       segments,
       segmentIds: (connector as any).segmentIds,
-      width: (connector as any).width ?? 40, // Use skeleton width or default
+      width: 40, // Default corridor width
       color: undefined,
       doors: [],
       connectedRoomIds: [fromRoomId, toRoomId].filter(Boolean),
@@ -478,63 +501,51 @@ export function convertToEditorFormat(mapJson: MapJSON, deckIndex = 0): EditorMa
       endAttachment
     }
   })
-
+  
   // Apply coalesce to merge overlapping corridor segments
   const { corridors: coalescedCorridors } = coalesceCorridors(
     corridors,
     {
       ...DEFAULT_COALESCE_SETTINGS,
-      enabled: true,
-      tolerancePx: 10,
-      minSharedLength: 20,
+      enabled: routing.coalesceEnabled,
+      tolerancePx: 20,
+      minSharedLength: 15,
     }
   )
-
+  
   // Generate doors at room-corridor connections
   const doors: Door[] = []
-
+  
   for (const connector of deck.connectors) {
     if (connector.path.length >= 2) {
-      // Check if start connects to a real room
-      // In SkeletonGenerator, 'SPINE', 'JUNCTION', etc are placeholders
-      // Real rooms usually have UUID or specific string IDs (from roomProgram)
-      // Or we can check if fromRoomId is in the rooms list
-      const isStartRoom = rooms.some(r => r.id === connector.fromRoomId);
-      const isEndRoom = rooms.some(r => r.id === connector.toRoomId);
-
-      // Also consider legacy behavior for non-skeleton generation where fromRoomId might be valid
-      // But let's assume if it's not in our room list, it's not a room we want a door to.
-
-      if (isStartRoom) {
-        const startPoint = connector.path[0]
-        doors.push({
-          id: `door-${connector.id}-start`,
-          type: getDoorType(connector.kind),
-          position: { x: startPoint.x, y: startPoint.y },
-          rotation: 0,
-          width: 30,
-          isOpen: false,
-          isLocked: false,
-          securityLevel: 0
-        })
-      }
-
-      if (isEndRoom) {
-        const endPoint = connector.path[connector.path.length - 1]
-        doors.push({
-          id: `door-${connector.id}-end`,
-          type: getDoorType(connector.kind),
-          position: { x: endPoint.x, y: endPoint.y },
-          rotation: 0,
-          width: 30,
-          isOpen: false,
-          isLocked: false,
-          securityLevel: 0
-        })
-      }
+      // Door at start
+      const startPoint = connector.path[0]
+      doors.push({
+        id: `door-${connector.id}-start`,
+        type: getDoorType(connector.kind),
+        position: { x: startPoint.x, y: startPoint.y },
+        rotation: 0,
+        width: 30,
+        isOpen: false,
+        isLocked: false,
+        securityLevel: 0
+      })
+      
+      // Door at end
+      const endPoint = connector.path[connector.path.length - 1]
+      doors.push({
+        id: `door-${connector.id}-end`,
+        type: getDoorType(connector.kind),
+        position: { x: endPoint.x, y: endPoint.y },
+        rotation: 0,
+        width: 30,
+        isOpen: false,
+        isLocked: false,
+        securityLevel: 0
+      })
     }
   }
-
+  
   return { rooms, corridors: coalescedCorridors, doors }
 }
 
@@ -546,22 +557,22 @@ function getZoneColor(zone: string, zones: Array<{ id: string; color: string }>)
 function findRoomAttachment(roomId: string, point: { x: number; y: number }, rooms: Room[]): CorridorAttachment | undefined {
   const room = rooms.find(r => r.id === roomId)
   if (!room) return undefined
-
+  
   const bounds = room.bounds
   const centerX = bounds.x + bounds.width / 2
   const centerY = bounds.y + bounds.height / 2
-
+  
   // Determine which wall the point is closest to
   const distTop = Math.abs(point.y - bounds.y)
   const distBottom = Math.abs(point.y - (bounds.y + bounds.height))
   const distLeft = Math.abs(point.x - bounds.x)
   const distRight = Math.abs(point.x - (bounds.x + bounds.width))
-
+  
   const minDist = Math.min(distTop, distBottom, distLeft, distRight)
-
+  
   let wall: 'top' | 'right' | 'bottom' | 'left'
   let offset: number
-
+  
   if (minDist === distTop) {
     wall = 'top'
     offset = (point.x - bounds.x) / bounds.width
@@ -575,7 +586,7 @@ function findRoomAttachment(roomId: string, point: { x: number; y: number }, roo
     wall = 'right'
     offset = (point.y - bounds.y) / bounds.height
   }
-
+  
   return {
     roomId,
     wall,
@@ -599,7 +610,7 @@ function getDoorType(kind: string): DoorType {
 /**
  * Map generator room type ID to core RoomType enum
  */
-function mapRoomTypeId(roomType: string): RoomType {
+export function mapRoomTypeId(roomType: string): RoomType {
   // Map common room type IDs to RoomType enum values
   const typeMap: Record<string, RoomType> = {
     'bridge': RoomTypeEnum.Bridge,
@@ -649,7 +660,69 @@ function mapRoomTypeId(roomType: string): RoomType {
     'escape_pod': RoomTypeEnum.Airlock, // No escape_pod in core, use Airlock
     'escapePod': RoomTypeEnum.Airlock
   }
-
+  
   return typeMap[roomType] || RoomTypeEnum.Generic
+}
+
+// ============================================================================
+// GRID ENGINE WRAPPER
+// ============================================================================
+
+/**
+ * Generate map using the new grid-based engine
+ */
+function generateMapWithGridEngine(options: GeneratorOptions): GenerationResult {
+  const result = generateGridMap({
+    seed: options.seed,
+    archetype: options.archetype,
+    subtype: options.subtype,
+    sizeTier: options.sizeTier,
+    styleProfile: options.styleProfile,
+    loopiness: options.loopiness,
+    danger: options.danger,
+    debug: false,
+  })
+
+  if (!result.success || !result.map) {
+    return {
+      success: false,
+      issues: [{
+        severity: 'error',
+        stage: 'generator',
+        message: result.error || 'Grid generation failed',
+      }],
+      timing: {
+        total: result.timing.total,
+        roomProgram: 0,
+        topology: 0,
+        layout: result.timing.hull + result.timing.zones + result.timing.spine + result.timing.rooms,
+        validation: 0,
+      },
+    }
+  }
+
+  // Convert MapJSON decks to DeckLayout format
+  const layouts: DeckLayout[] = result.map.decks.map(deck => ({
+    deckIndex: deck.index,
+    gridWidth: deck.gridWidth,
+    gridHeight: deck.gridHeight,
+    rooms: deck.rooms,
+    connectors: deck.connectors,
+    junctions: deck.junctions,
+  }))
+
+  return {
+    success: true,
+    map: result.map,
+    layouts,
+    issues: [],
+    timing: {
+      total: result.timing.total,
+      roomProgram: 0,
+      topology: result.timing.hull + result.timing.zones,
+      layout: result.timing.spine + result.timing.rooms + result.timing.doors,
+      validation: result.timing.convert,
+    },
+  }
 }
 

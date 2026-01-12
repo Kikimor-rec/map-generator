@@ -1,10 +1,27 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useEditor, actions } from '@store/EditorContext'
 import { MapThemeId, MAP_THEMES, type MapProject } from '@core/types'
 import { GenerationPanel } from './GenerationPanel'
+import { SnapshotsPanel } from './SnapshotsPanel'
+import { CommandPalette } from './CommandPalette'
 
 export function TopBar() {
   const [showGenerationPanel, setShowGenerationPanel] = useState(false)
+  const [showSnapshotsPanel, setShowSnapshotsPanel] = useState(false)
+  const [showCommandPalette, setShowCommandPalette] = useState(false)
+  const [isExporting, setIsExporting] = useState(false)
+  
+  // Global Ctrl+K shortcut for command palette
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault()
+        setShowCommandPalette(prev => !prev)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
   
   const { state, dispatch, canUndo, canRedo } = useEditor()
   const { project, isDirty, viewport, activeTheme } = state
@@ -60,7 +77,11 @@ export function TopBar() {
       return
     }
     
+    setIsExporting(true)
     try {
+      // Small delay to show indicator
+      await new Promise(r => setTimeout(r, 50))
+      
       // For WebGL canvas, we need to ensure preserveDrawingBuffer or use a workaround
       // Create a new canvas and draw the WebGL content
       const tempCanvas = document.createElement('canvas')
@@ -80,6 +101,8 @@ export function TopBar() {
     } catch (error) {
       console.error('Export failed:', error)
       alert('Export failed. Try again.')
+    } finally {
+      setIsExporting(false)
     }
   }
 
@@ -101,8 +124,12 @@ export function TopBar() {
           <button onClick={handleSave} className="btn btn-secondary text-sm" disabled={!project}>
             💾 Save
           </button>
-          <button onClick={handleExportPNG} className="btn btn-secondary text-sm" disabled={!project}>
-            🖼️ Export PNG
+          <button 
+            onClick={handleExportPNG} 
+            className="btn btn-secondary text-sm" 
+            disabled={!project || isExporting}
+          >
+            {isExporting ? '⏳ Exporting...' : '🖼️ Export PNG'}
           </button>
           <button 
             onClick={() => setShowGenerationPanel(true)} 
@@ -110,6 +137,14 @@ export function TopBar() {
             disabled={!project}
           >
             🚀 Generate
+          </button>
+          <button 
+            onClick={() => setShowSnapshotsPanel(true)} 
+            className="btn btn-secondary text-sm"
+            disabled={!project}
+            title="Save/Load map variants"
+          >
+            📸 Snapshots
           </button>
         </div>
 
@@ -184,6 +219,20 @@ export function TopBar() {
       <GenerationPanel 
         isOpen={showGenerationPanel} 
         onClose={() => setShowGenerationPanel(false)} 
+      />
+      
+      {/* Snapshots Panel Modal */}
+      <SnapshotsPanel 
+        isOpen={showSnapshotsPanel} 
+        onClose={() => setShowSnapshotsPanel(false)} 
+      />
+      
+      {/* Command Palette Modal */}
+      <CommandPalette 
+        isOpen={showCommandPalette} 
+        onClose={() => setShowCommandPalette(false)}
+        onOpenGenerate={() => setShowGenerationPanel(true)}
+        onOpenSnapshots={() => setShowSnapshotsPanel(true)}
       />
     </div>
   )

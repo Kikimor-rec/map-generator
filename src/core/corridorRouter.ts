@@ -157,7 +157,7 @@ export class CorridorRouter {
     clearance: number,
     intersectionPolicy: IntersectionPolicy
   ): RouteResult {
-    const cellSize = Math.max(10, this.gridSize / 4)
+    const cellSize = Math.max(20, this.gridSize / 2)
     const padding = corridorWidth / 2 + clearance * this.gridSize
     
     // Calculate bounds
@@ -270,9 +270,16 @@ export class CorridorRouter {
         const { reuseBonus, isReuse } = costs.preferReuseEnabled
           ? this.getReuseBonus(worldPos, costs.reuseBonus, costs.reuseBonusStrength)
           : { reuseBonus: 0, isReuse: false }
-        
+
+        // Direction bonus (prefer moving towards goal)
+        const directionBonus = this.getDirectionBonus(
+          toWorld(current.x, current.y),
+          worldPos,
+          to
+        )
+
         // Total g cost
-        const g = current.g + moveCost + bendCost + nearMissCost + crossingCost + reuseBonus
+        const g = current.g + moveCost + bendCost + nearMissCost + crossingCost + reuseBonus + directionBonus
         const h = this.heuristic({ x: nx, y: ny }, gridEnd) * costs.lengthCost * cellSize
         const f = g + h
         
@@ -338,6 +345,34 @@ export class CorridorRouter {
     }
   }
   
+  /**
+   * Calculate direction bonus for A* to prefer moving towards the goal
+   * Returns negative value (bonus) if moving towards goal, positive (penalty) if moving away
+   */
+  private getDirectionBonus(
+    current: Point,
+    next: Point,
+    goal: Point,
+    directionBonusStrength: number = 20
+  ): number {
+    const toGoalX = Math.sign(goal.x - current.x)
+    const toGoalY = Math.sign(goal.y - current.y)
+    const moveX = Math.sign(next.x - current.x)
+    const moveY = Math.sign(next.y - current.y)
+
+    let bonus = 0
+
+    // Bonus for moving towards goal
+    if (moveX === toGoalX && moveX !== 0) bonus -= directionBonusStrength
+    if (moveY === toGoalY && moveY !== 0) bonus -= directionBonusStrength
+
+    // Penalty for moving away from goal
+    if (moveX === -toGoalX && moveX !== 0) bonus += directionBonusStrength * 1.5
+    if (moveY === -toGoalY && moveY !== 0) bonus += directionBonusStrength * 1.5
+
+    return bonus
+  }
+
   /**
    * Get corridor width in pixels
    */

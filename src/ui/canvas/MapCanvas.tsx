@@ -2,7 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import { Application, Graphics, Container, Text, TextStyle, Rectangle, Polygon } from 'pixi.js'
 import { useEditor, actions } from '@store/EditorContext'
 import { DuplicateIcon, TrashIcon, BringToFrontIcon, SendToBackIcon, SelectAllIcon, RoomIcon } from '@ui/components/Icons'
-import { EditorTool, CorridorStyle, DoorType, type Rect, type Point, type Room, type Door, type CorridorAttachment, ROOM_TYPE_CONFIGS } from '@core/types'
+import { EditorTool, CorridorStyle, DoorType, type Rect, type Point, type Room, type Door, type CorridorAttachment, type CorridorJunction, type CorridorLineJump, ROOM_TYPE_CONFIGS } from '@core/types'
 import { snapToRoomWall, autoRouteCorridor, checkCorridorRoomCollision, updateCorridorAttachments } from '@core/corridorPathfinding'
 
 // Helper to convert hex string to number
@@ -185,6 +185,7 @@ export function MapCanvas() {
   const gridRef = useRef<Graphics | null>(null)
   const roomsContainerRef = useRef<Container | null>(null)
   const corridorsContainerRef = useRef<Container | null>(null)
+  const junctionsContainerRef = useRef<Container | null>(null)
   const previewRef = useRef<Graphics | null>(null)
   const [isReady, setIsReady] = useState(false)
   
@@ -256,7 +257,7 @@ export function MapCanvas() {
   // Segment-level selection (local UI only)
   const [selectedSegment, setSelectedSegment] = useState<SegmentSelection | null>(null)
 
-  const { state, dispatch, activeDeck, rooms, corridors } = useEditor()
+  const { state, dispatch, activeDeck, rooms, corridors, junctions, lineJumps } = useEditor()
   const { 
     viewport, 
     activeTheme, 
@@ -339,6 +340,12 @@ export function MapCanvas() {
         corridorsContainer.name = 'corridors'
         worldContainer.addChild(corridorsContainer)
         corridorsContainerRef.current = corridorsContainer
+
+        // Create junctions/line jumps container (above corridors)
+        const junctionsContainer = new Container()
+        junctionsContainer.name = 'junctions'
+        worldContainer.addChild(junctionsContainer)
+        junctionsContainerRef.current = junctionsContainer
 
         // Create rooms container
         const roomsContainer = new Container()
@@ -794,8 +801,9 @@ export function MapCanvas() {
         if (activeTool === EditorTool.Select) {
           e.stopPropagation()
           
-          // Shift+click for multi-select
+          // Shift+click for multi-select, Alt+click for segment selection
           const shiftKey = (e.data.originalEvent as unknown as PointerEvent)?.shiftKey
+          const altKey = (e.data.originalEvent as unknown as PointerEvent)?.altKey
           const worldPos = screenToWorld(e.global.x, e.global.y)
 
           // Determine nearest segment to click for highlighting
@@ -813,6 +821,13 @@ export function MapCanvas() {
             setSelectedSegment({ corridorId: corridor.id, segmentIndex: nearestIndex })
           } else {
             setSelectedSegment(null)
+          }
+
+          // Alt+click: select specific segment only
+          if (altKey && nearestIndex !== null && nearestDist <= selectThreshold) {
+            const segmentId = `${corridor.id}:${nearestIndex}`
+            dispatch(actions.select({ type: 'corridor-segment', ids: [segmentId] }))
+            return // Don't start corridor drag when selecting segment
           }
 
           if (shiftKey && selection.type === 'corridor') {
@@ -945,6 +960,112 @@ export function MapCanvas() {
     
     console.log('Corridors drawn:', corridors.length)
   }, [activeDeck, corridors, activeTheme, isReady, selection, hoveredId, activeTool, dispatch, screenToWorld])
+
+  // Draw junctions and line jumps
+  useEffect(() => {
+    if (!junctionsContainerRef.current || !isReady) return
+    
+    const container = junctionsContainerRef.current
+    container.removeChildren()
+
+    // Draw junctions (T, X, hub, etc.)
+    for (const junction of junctions) {
+      const graphics = new Graphics()
+      const { x, y } = junction.position
+      
+      // Junction size based on kind
+      const size = junction.kind === 'hub' ? 24 : 
+                   junction.kind === 'airlockChamber' ? 20 : 12
+      
+      // Junction color
+      const color = junction.isCheckpoint ? 0xef4444 : // Red for checkpoints
+                    junction.isBulkhead ? 0xf59e0b :   // Orange for bulkheads
+                    0x00ff9f                           // Green default
+      
+      // Draw junction marker based on kind
+      if (junction.kind === 'T') {
+        // T-junction: small diamond
+        graphics.beginFill(color, 0.8)
+        graphics.lineStyle(2, 0xffffff, 0.8)
+        graphics.moveTo(x, y - size)
+        graphics.lineTo(x + size, y)
+        graphics.lineTo(x, y + size)
+        graphics.lineTo(x - size, y)
+        graphics.closePath()
+        graphics.endFill()
+      } else if (junction.kind === 'X') {
+        // X-junction: circle with cross
+        graphics.lineStyle(2, color, 0.8)
+        graphics.beginFill(0x0a1628, 0.9)
+        graphics.drawCircle(x, y, size)
+        graphics.endFill()
+        graphics.lineStyle(2, color, 1)
+        graphics.moveTo(x - size * 0.5, y)
+        graphics.lineTo(x + size * 0.5, y)
+        graphics.moveTo(x, y - size * 0.5)
+        graphics.lineTo(x, y + size * 0.5)
+      } else if (junction.kind === 'hub') {
+        // Hub: larger hexagon
+        graphics.beginFill(color, 0.6)
+        graphics.lineStyle(3, color, 1)
+        const points: number[] = []
+        for (let i = 0; i < 6; i++) {
+          const angle = (Math.PI / 3) * i - Math.PI / 6
+          points.push(x + size * Math.cos(angle), y + size * Math.sin(angle))
+        }
+        graphics.drawPolygon(points)
+        graphics.endFill()
+      } else if (junction.kind === 'airlockChamber') {
+        // Airlock: rounded rectangle
+        graphics.beginFill(0x0a1628, 0.9)
+        graphics.lineStyle(3, color, 1)
+        graphics.drawRoundedRect(x - size, y - size * 0.6, size * 2, size * 1.2, 4)
+        graphics.endFill()
+        // Inner doors indication
+        graphics.lineStyle(2, color, 0.8)
+        graphics.moveTo(x - size * 0.3, y - size * 0.4)
+        graphics.lineTo(x - size * 0.3, y + size * 0.4)
+        graphics.moveTo(x + size * 0.3, y - size * 0.4)
+        graphics.lineTo(x + size * 0.3, y + size * 0.4)
+      }
+      
+      container.addChild(graphics)
+    }
+
+    // Draw line jumps (corridor crossings without connection)
+    for (const jump of lineJumps) {
+      const graphics = new Graphics()
+      const { x, y } = jump.position
+      const size = jump.size || 10
+      
+      if (jump.style === 'arc') {
+        // Arc jump: curved bridge
+        graphics.lineStyle(3, 0x00d4ff, 0.9)
+        graphics.arc(x, y - size * 0.3, size, 0, Math.PI, false)
+      } else if (jump.style === 'gap') {
+        // Gap jump: just clear the area (handled by corridor rendering)
+        // Draw small indicators at gap edges
+        graphics.lineStyle(2, 0x00d4ff, 0.7)
+        graphics.moveTo(x - size, y - 3)
+        graphics.lineTo(x - size, y + 3)
+        graphics.moveTo(x + size, y - 3)
+        graphics.lineTo(x + size, y + 3)
+      } else if (jump.style === 'sharp') {
+        // Sharp jump: angular bridge
+        graphics.lineStyle(3, 0x00d4ff, 0.9)
+        graphics.moveTo(x - size, y)
+        graphics.lineTo(x - size * 0.3, y - size * 0.5)
+        graphics.lineTo(x + size * 0.3, y - size * 0.5)
+        graphics.lineTo(x + size, y)
+      }
+      
+      container.addChild(graphics)
+    }
+    
+    if (junctions.length > 0 || lineJumps.length > 0) {
+      console.log('Junctions/LineJumps drawn:', junctions.length, lineJumps.length)
+    }
+  }, [junctions, lineJumps, isReady])
 
   // Update attached corridors when rooms change position/size
   useEffect(() => {
@@ -1744,11 +1865,28 @@ export function MapCanvas() {
     
     if (e.key === 'Delete' || e.key === 'Backspace') {
       // Handle deletion of selected items
-      if (selection.type === 'room' && selection.ids.length > 0) {
+      if (selection.type === 'corridor-segment' && selection.ids.length > 0) {
+        // Delete selected segments from corridors
+        for (const segmentId of selection.ids) {
+          const [corridorId, segmentIndexStr] = segmentId.split(':')
+          const segmentIndex = parseInt(segmentIndexStr, 10)
+          const corridor = corridors.find(c => c.id === corridorId)
+          if (corridor && !isNaN(segmentIndex) && corridor.segments.length > 1) {
+            // Remove the segment and update corridor
+            const newSegments = corridor.segments.filter((_, idx) => idx !== segmentIndex)
+            dispatch(actions.updateCorridor(corridorId, { segments: newSegments }))
+          } else if (corridor && corridor.segments.length === 1) {
+            // If only one segment, delete the whole corridor
+            dispatch(actions.deleteCorridors([corridorId]))
+          }
+        }
+        setSelectedSegment(null)
+        dispatch(actions.clearSelection())
+        dispatch(actions.pushHistory())
+      } else if (selection.type === 'room' && selection.ids.length > 0) {
         dispatch(actions.deleteRooms(selection.ids))
         dispatch(actions.pushHistory())
-      }
-      if (selection.type === 'corridor' && selection.ids.length > 0) {
+      } else if (selection.type === 'corridor' && selection.ids.length > 0) {
         dispatch(actions.deleteCorridors(selection.ids))
         dispatch(actions.pushHistory())
       }
@@ -1770,7 +1908,7 @@ export function MapCanvas() {
     if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
       dispatch(actions.toggleSnapToGrid())
     }
-  }, [selection, dispatch, corridorDrawState, finishCorridorDrawing])
+  }, [selection, dispatch, corridorDrawState, finishCorridorDrawing, corridors])
   
   // Handle context menu (right click)
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -1844,8 +1982,25 @@ export function MapCanvas() {
     
     switch (action) {
       case 'delete':
-        if (selection.ids.length > 0) {
-          // Delete selected rooms
+        if (selection.type === 'corridor-segment' && selection.ids.length > 0) {
+          // Delete selected segments from corridors
+          for (const segmentId of selection.ids) {
+            const [corridorId, segmentIndexStr] = segmentId.split(':')
+            const segmentIndex = parseInt(segmentIndexStr, 10)
+            const corridor = corridors.find(c => c.id === corridorId)
+            if (corridor && !isNaN(segmentIndex) && corridor.segments.length > 1) {
+              // Remove the segment and update corridor
+              const newSegments = corridor.segments.filter((_, idx) => idx !== segmentIndex)
+              dispatch(actions.updateCorridor(corridorId, { segments: newSegments }))
+            } else if (corridor && corridor.segments.length === 1) {
+              // If only one segment, delete the whole corridor
+              dispatch(actions.deleteCorridors([corridorId]))
+            }
+          }
+          setSelectedSegment(null)
+          dispatch(actions.clearSelection())
+        } else if (selection.ids.length > 0) {
+          // Delete selected rooms/corridors
           const roomIds = selection.ids.filter((id: string) => rooms.find(r => r.id === id))
           const corridorIds = selection.ids.filter((id: string) => corridors.find(c => c.id === id))
           

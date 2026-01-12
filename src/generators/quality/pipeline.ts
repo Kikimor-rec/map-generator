@@ -44,74 +44,6 @@ type Point = { x: number; y: number }
 // CANDIDATE GENERATION
 // ============================================================================
 
-import { generateSkeletonLayout } from '../skeletonGenerator';
-import { generateSkeletonLayoutV2 } from '../skeletonGeneratorV2';
-
-// Helper to convert Skeleton result to CandidateData
-function convertSkeletonToCandidate(
-  layouts: import('../types').DeckLayout[],
-  program: RoomProgramEntry[],
-  topologyEdges: TopologyEdge[]
-): CandidateData {
-  const deck = layouts[0]; // Assume single deck
-
-  const placedRooms: PlacedRoom[] = deck.rooms.map(r => ({
-    id: r.id,
-    programId: r.id,
-    x: r.x, // Pixels
-    y: r.y, // Pixels
-    width: r.width,
-    height: r.height,
-    rotation: 0,
-    ports: r.ports?.map(p => ({
-      id: p.id,
-      x: p.x,
-      y: p.y,
-      wall: p.wall as any
-    })) || []
-  }));
-
-  const corridors: RoutedCorridor[] = deck.connectors.map(c => {
-    // Determine length and bends from path
-    let length = 0;
-    if (c.path && c.path.length > 1) {
-      for (let i = 0; i < c.path.length - 1; i++) {
-        length += Math.abs(c.path[i].x - c.path[i + 1].x) + Math.abs(c.path[i].y - c.path[i + 1].y);
-      }
-    }
-
-    return {
-      id: c.id,
-      edgeId: c.id,
-      fromRoomId: c.fromRoomId,
-      toRoomId: c.toRoomId,
-      fromPortId: 'unknown',
-      toPortId: 'unknown',
-      path: c.path,
-      width: c.width,
-      type: 'corridor',
-      length,
-      bends: 0
-    }
-  });
-
-  const junctions: JunctionData[] = deck.junctions.map(j => ({
-    id: j.id,
-    x: j.x,
-    y: j.y,
-    degree: j.connectorIds.length,
-    corridorIds: j.connectorIds
-  }));
-
-  return {
-    rooms: program,
-    graph: topologyEdges,
-    placedRooms,
-    corridors,
-    junctions
-  };
-}
-
 /**
  * Generate a single candidate
  */
@@ -124,206 +56,46 @@ function generateCandidate(
   const startTime = performance.now()
   const candidateId = `candidate-${index}`
   const candidateSeed = `${seed}-${index}`
-
+  
   const rng = createRNG(candidateSeed)
-
+  
   try {
-    // Check if we should use Skeleton Strategy
-    const { archetype, sizeTier } = options.mapParams;
-    const arch = archetype as string;
-    const useSkeleton = (arch === 'capital' || arch === 'bunker' ||
-      (arch === 'ship' && sizeTier === 'lg') ||
-      (arch === 'station' && sizeTier === 'lg') ||
-      (options.mapParams.subtype === 'explorer'));
-
-    if (useSkeleton) {
-      // Stage A: Room Program (Pipeline Version)
-      const rooms = generateRoomProgram(rng, options);
-      // Stage B: Topology (Pipeline Version)
-      const graph = generateTopologyGraph(rng, rooms, options);
-
-      // Adapt to Core Topology
-      const topology: import('../types').TopologyGraph = {
-        rooms: rooms.map(r => ({
-          id: r.id,
-          roomType: r.type,
-          label: r.label,
-          estimatedTiles: (r.targetSize.width * r.targetSize.height) / 1600,
-          estimatedWidth: r.targetSize.width / 40,
-          estimatedHeight: r.targetSize.height / 40,
-          zone: r.zone,
-          importance: (r.importance === 'key' || r.importance === 'hub') ? 'primary' :
-            (r.importance === 'normal') ? 'secondary' : 'tertiary',
-          tags: r.tags || [],
-          metrics: {},
-          adjacency: [],
-          accessLevel: 1,
-          adjacencyPreferences: [],
-          forbiddenAdjacencies: [],
-          isExterior: false,
-          deck: 0
-        })),
-        connectors: graph.map(e => ({
-          id: e.id,
-          fromRoomId: e.fromRoomId,
-          toRoomId: e.toRoomId,
-          kind: e.kind,
-          isVertical: false,
-          isBackbone: e.isBackbone || false
-        })),
-        deckCount: 1,
-        roomsByDeck: [rooms.map(r => r.id)],
-        metrics: {
-          totalNodes: rooms.length,
-          totalEdges: graph.length,
-          avgDegree: 0,
-          loopCount: 0,
-          backboneLength: 0,
-          diameter: 0
-        }
-      };
-
-      const genRequest: import('../types').GenerationRequest = {
-        seed: candidateSeed,
-        archetype: archetype as any,
-        subtype: options.mapParams.subtype as any,
-        sizeTier: sizeTier as any,
-        loopiness: options.mapParams.loopiness ?? 0.5,
-        danger: options.mapParams.danger ?? 0.5,
-        styleProfile: options.styleProfile ?? 'utilitarian'
-      };
-
-      // Use V2 generator with hub rooms and multi-spine support
-      const layouts = generateSkeletonLayoutV2({ request: genRequest, topology });
-      const processedData = convertSkeletonToCandidate(layouts, rooms, graph);
-
-      // Build mapData for UI compatibility
-      const gridSize = options.mapParams.gridSize ?? 40;
-      const allX = processedData.placedRooms.flatMap(r => [r.x, r.x + r.width]);
-      const allY = processedData.placedRooms.flatMap(r => [r.y, r.y + r.height]);
-      const minX = Math.min(...allX, 0);
-      const minY = Math.min(...allY, 0);
-      const maxX = Math.max(...allX, 1000);
-      const maxY = Math.max(...allY, 1000);
-      const gridWidth = Math.ceil((maxX - minX) / gridSize) + 4;
-      const gridHeight = Math.ceil((maxY - minY) / gridSize) + 4;
-
-      processedData.mapData = {
-        version: '1.0.0',
-        meta: {
-          name: `${options.mapParams.archetype}-${candidateSeed}`,
-          archetype: options.mapParams.archetype,
-          subtype: options.mapParams.subtype,
-          sizeTier: options.mapParams.sizeTier,
-          seed: candidateSeed,
-          generatedAt: new Date().toISOString(),
-          ttrpgMetrics: {
-            totalRooms: processedData.placedRooms.length,
-            traversalTime: `${Math.ceil(processedData.placedRooms.length * 0.5)} turns`,
-            encounterDensity: processedData.placedRooms.length > 10 ? 'high' : 'medium',
-            chokepointCount: 0
-          },
-          tags: []
-        },
-        grid: {
-          cellSize: gridSize,
-          snapEnabled: true
-        },
-        zones: [
-          { id: 'default', label: 'Main', color: '#4A90D9' }
-        ],
-        decks: [{
-          index: 0,
-          label: 'Deck 1',
-          gridWidth,
-          gridHeight,
-          rooms: processedData.placedRooms.map(r => ({
-            id: r.id,
-            label: r.id,
-            type: 'general',
-            zone: 'default',
-            x: Math.floor(r.x / gridSize),
-            y: Math.floor(r.y / gridSize),
-            width: Math.floor(r.width / gridSize),
-            height: Math.floor(r.height / gridSize),
-            rotation: r.rotation,
-            ports: r.ports.map((p, idx) => ({
-              id: p.id || `${r.id}-port-${idx}`,
-              side: p.wall,
-              position: 0.5,
-              connectorId: null
-            }))
-          })),
-          connectors: processedData.corridors.map(c => ({
-            id: c.id,
-            type: c.type || 'corridor',
-            fromRoomId: c.fromRoomId,
-            toRoomId: c.toRoomId,
-            fromPort: { roomId: c.fromRoomId || '', portId: c.fromPortId },
-            toPort: { roomId: c.toRoomId || '', portId: c.toPortId },
-            path: c.path,
-            waypoints: c.path
-          })),
-          junctions: processedData.junctions.map(j => ({
-            id: j.id,
-            x: j.x,
-            y: j.y,
-            corridorIds: j.corridorIds
-          }))
-        }]
-      };
-
-      const generationTimeMs = performance.now() - startTime;
-
-      return {
-        id: candidateId,
-        seed: candidateSeed,
-        index,
-        isValid: true,
-        validationErrors: [],
-        score: 100,
-        scoreBreakdown: { total: 100, components: {} as any, styleAdjustment: 1 },
-        generationTimeMs,
-        data: processedData,
-      };
-    }
-
     // Stage A: Room Program
     const rooms = generateRoomProgram(rng, options)
-
+    
     // Stage B: Topology Graph
     const graph = generateTopologyGraph(rng, rooms, options)
-
+    
     // Stage C: Layout / Packing
     const placedRooms = layoutRooms(rng, rooms, graph, options)
-
+    
     // Stage D: Routing
     const corridors = routeCorridors(rng, placedRooms, graph, options)
-
+    
     // Build junctions from corridors
     const junctions = extractJunctions(corridors)
-
+    
     // Stage E: Post-processing
     const processedData = postProcess(
       { rooms, graph, placedRooms, corridors, junctions },
       config,
       options
     )
-
+    
     // Validate
     const validatorOpts: ValidatorOptions = {
       roomClearance: options.mapParams.roomClearance ?? 1,
       strictness: config.validationStrictness,
     }
     const validation = validateCandidate(processedData, validatorOpts)
-
+    
     // Score (only if valid or for diagnostics)
     const scoreBreakdown = scoreCandidate(processedData, {
       styleProfile: options.styleProfile,
     })
-
+    
     const generationTimeMs = performance.now() - startTime
-
+    
     return {
       id: candidateId,
       seed: candidateSeed,
@@ -337,7 +109,7 @@ function generateCandidate(
     }
   } catch (error) {
     const generationTimeMs = performance.now() - startTime
-
+    
     return {
       id: candidateId,
       seed: candidateSeed,
@@ -386,7 +158,7 @@ function generateRoomProgram(
 ): RoomProgramEntry[] {
   const { mapParams } = options
   const { archetype, sizeTier } = mapParams
-
+  
   // Determine room count based on size tier
   const roomCounts: Record<string, { min: number; max: number }> = {
     xs: { min: 4, max: 8 },
@@ -395,24 +167,22 @@ function generateRoomProgram(
     lg: { min: 32, max: 64 },
     xl: { min: 64, max: 128 },
   }
-
+  
   const countRange = roomCounts[sizeTier] || roomCounts.md
   const targetCount = mapParams.roomCount ?? rng.randomInt(countRange.min, countRange.max)
-
+  
   // Room types by archetype
   const roomTypesByArchetype: Record<string, string[]> = {
     ship: ['bridge', 'engineering', 'quarters', 'medbay', 'cargoBay', 'airlock', 'storage', 'galley', 'armory', 'lifePod'],
     station: ['commandCenter', 'reactor', 'hangar', 'quarters', 'lab', 'medbay', 'cargoBay', 'docking', 'commonArea', 'storage'],
     outpost: ['commandCenter', 'generator', 'quarters', 'lab', 'storage', 'airlock', 'comms', 'garage'],
-    capital: ['bridge', 'reactor', 'engineering', 'quarters', 'messhall', 'medbay', 'cargoBay', 'hangar', 'weaponBay', 'shieldGen', 'fighterBay'],
-    bunker: ['commandCenter', 'reactor', 'quarters', 'armory', 'storage', 'medbay', 'airlock', 'securityStation', 'serverRoom']
   }
-
+  
   const availableTypes = roomTypesByArchetype[archetype] || roomTypesByArchetype.ship
-
+  
   // Generate room list
   const rooms: RoomProgramEntry[] = []
-
+  
   // Always include key rooms first
   const keyRooms = availableTypes.slice(0, 3)
   for (const type of keyRooms) {
@@ -430,12 +200,12 @@ function generateRoomProgram(
       required: true,
     })
   }
-
+  
   // Add remaining rooms
   while (rooms.length < targetCount) {
     const type = rng.pick(availableTypes)
     const sizeConfig = getRoomSizeConfig(type)
-
+    
     rooms.push({
       id: `room-${rooms.length}`,
       type,
@@ -449,7 +219,7 @@ function generateRoomProgram(
       required: rooms.length < targetCount * 0.7, // 70% are required
     })
   }
-
+  
   return rooms
 }
 
@@ -487,17 +257,17 @@ function generateTopologyGraph(
 ): TopologyEdge[] {
   const edges: TopologyEdge[] = []
   const { loopiness = 0.5, minCycles = 0 } = options.mapParams
-
+  
   // Create minimum spanning tree first (ensures connectivity)
   const connected = new Set<string>([rooms[0].id])
   const unconnected = new Set(rooms.slice(1).map(r => r.id))
-
+  
   while (unconnected.size > 0) {
     // Pick random connected room
     const fromId = rng.pick(Array.from(connected))
     // Pick random unconnected room
     const toId = rng.pick(Array.from(unconnected))
-
+    
     edges.push({
       id: `edge-${edges.length}`,
       fromRoomId: fromId,
@@ -506,33 +276,33 @@ function generateTopologyGraph(
       required: true,
       isBackbone: edges.length < rooms.length / 3,
     })
-
+    
     connected.add(toId)
     unconnected.delete(toId)
   }
-
+  
   // Add extra edges for loops (based on loopiness)
   const maxExtraEdges = Math.floor(rooms.length * loopiness)
   const targetCycles = Math.max(minCycles, Math.floor(loopiness * rooms.length * 0.3))
-
+  
   let addedEdges = 0
   const maxAttempts = maxExtraEdges * 3
   let attempts = 0
-
+  
   while (addedEdges < maxExtraEdges && attempts < maxAttempts) {
     attempts++
-
+    
     const fromId = rng.pick(rooms).id
     const toId = rng.pick(rooms).id
-
+    
     if (fromId === toId) continue
-
+    
     // Check if edge already exists
-    const exists = edges.some(e =>
+    const exists = edges.some(e => 
       (e.fromRoomId === fromId && e.toRoomId === toId) ||
       (e.fromRoomId === toId && e.toRoomId === fromId)
     )
-
+    
     if (!exists) {
       edges.push({
         id: `edge-${edges.length}`,
@@ -545,7 +315,7 @@ function generateTopologyGraph(
       addedEdges++
     }
   }
-
+  
   return edges
 }
 
@@ -562,38 +332,38 @@ function layoutRooms(
   const gridSize = options.mapParams.gridSize ?? 40
   // Increase clearance to leave room for corridors (at least 5 grid units for corridor + buffer)
   const clearance = Math.max(5, options.mapParams.roomClearance ?? 5)
-
+  
   const placedRooms: PlacedRoom[] = []
   const occupied: Array<{ x: number; y: number; width: number; height: number }> = []
-
+  
   // Sort by importance (key rooms first)
   const sortedRooms = [...rooms].sort((a, b) => {
     const importanceOrder = { key: 0, hub: 1, normal: 2, optional: 3 }
     return (importanceOrder[a.importance] || 2) - (importanceOrder[b.importance] || 2)
   })
-
+  
   for (const room of sortedRooms) {
     // Determine actual size (between min and target)
     const width = rng.randomInt(room.minSize.width, room.targetSize.width)
     const height = rng.randomInt(room.minSize.height, room.targetSize.height)
-
+    
     // Find valid position
     let placed = false
     let x = 0, y = 0
     const maxAttempts = 100
-
+    
     for (let attempt = 0; attempt < maxAttempts && !placed; attempt++) {
       // Start near center and spiral outward
       const radius = Math.floor(attempt / 8) * 3
       const angle = (attempt % 8) * (Math.PI / 4)
-
+      
       x = Math.floor(Math.cos(angle) * radius * gridSize)
       y = Math.floor(Math.sin(angle) * radius * gridSize)
-
+      
       // Add some randomness
       x += rng.randomInt(-2, 2) * gridSize
       y += rng.randomInt(-2, 2) * gridSize
-
+      
       // Check for overlaps
       const candidate = {
         x: x,
@@ -601,19 +371,19 @@ function layoutRooms(
         width: width * gridSize,
         height: height * gridSize,
       }
-
-      const overlaps = occupied.some(o =>
+      
+      const overlaps = occupied.some(o => 
         !(candidate.x + candidate.width + clearance * gridSize <= o.x ||
           o.x + o.width + clearance * gridSize <= candidate.x ||
           candidate.y + candidate.height + clearance * gridSize <= o.y ||
           o.y + o.height + clearance * gridSize <= candidate.y)
       )
-
+      
       if (!overlaps) {
         placed = true
       }
     }
-
+    
     // Create ports on each wall
     const ports: PortData[] = []
     const addPort = (wall: 'top' | 'bottom' | 'left' | 'right', offsetRatio: number) => {
@@ -643,7 +413,7 @@ function layoutRooms(
         wall,
       })
     }
-
+    
     // Add 1-2 ports per wall
     for (const wall of ['top', 'bottom', 'left', 'right'] as const) {
       addPort(wall, 0.5)
@@ -651,7 +421,7 @@ function layoutRooms(
         addPort(wall, rng.random() > 0.5 ? 0.3 : 0.7)
       }
     }
-
+    
     placedRooms.push({
       id: room.id,
       programId: room.id,
@@ -662,7 +432,7 @@ function layoutRooms(
       rotation: 0,
       ports,
     })
-
+    
     occupied.push({
       x,
       y,
@@ -670,7 +440,7 @@ function layoutRooms(
       height: height * gridSize,
     })
   }
-
+  
   return placedRooms
 }
 
@@ -876,15 +646,15 @@ function segmentIntersectsRoom(seg: Segment, room: PlacedRoom, clearance: number
     width: room.width + clearance * 2,
     height: room.height + clearance * 2,
   }
-
+  
   // Check if either endpoint is strictly inside the rect
   const startInside = seg.start.x > rect.x && seg.start.x < rect.x + rect.width &&
-    seg.start.y > rect.y && seg.start.y < rect.y + rect.height
+                      seg.start.y > rect.y && seg.start.y < rect.y + rect.height
   const endInside = seg.end.x > rect.x && seg.end.x < rect.x + rect.width &&
-    seg.end.y > rect.y && seg.end.y < rect.y + rect.height
-
+                    seg.end.y > rect.y && seg.end.y < rect.y + rect.height
+  
   if (startInside || endInside) return true
-
+  
   // Check line segment against rectangle edges
   const edges: Segment[] = [
     { start: { x: rect.x, y: rect.y }, end: { x: rect.x + rect.width, y: rect.y } },
@@ -892,13 +662,13 @@ function segmentIntersectsRoom(seg: Segment, room: PlacedRoom, clearance: number
     { start: { x: rect.x, y: rect.y + rect.height }, end: { x: rect.x + rect.width, y: rect.y + rect.height } },
     { start: { x: rect.x, y: rect.y }, end: { x: rect.x, y: rect.y + rect.height } },
   ]
-
+  
   for (const edge of edges) {
     if (linesIntersect(seg.start, seg.end, edge.start, edge.end)) {
       return true
     }
   }
-
+  
   return false
 }
 
@@ -913,12 +683,12 @@ function linesIntersect(
   const d2 = direction(p3, p4, p2)
   const d3 = direction(p1, p2, p3)
   const d4 = direction(p1, p2, p4)
-
+  
   if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-    ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+      ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
     return true
   }
-
+  
   return false
 }
 
@@ -937,10 +707,10 @@ function pathIntersectsRooms(
   if (!path || path.length < 2) return false
   for (let i = 0; i < path.length - 1; i++) {
     const seg: Segment = { start: path[i], end: path[i + 1] }
-
+    
     for (const room of rooms) {
       if (excludeRoomIds.includes(room.id)) continue
-
+      
       if (segmentIntersectsRoom(seg, room)) {
         return true
       }
@@ -1063,7 +833,7 @@ function findPathAStar(
   gridSize: number
 ): Array<{ x: number; y: number }> | null {
   const cellSize = gridSize * 2 // Coarse grid for speed
-
+  
   // Calculate bounds
   const allX = rooms.map(r => [r.x, r.x + r.width]).flat().concat([fromPort.x, toPort.x])
   const allY = rooms.map(r => [r.y, r.y + r.height]).flat().concat([fromPort.y, toPort.y])
@@ -1071,36 +841,36 @@ function findPathAStar(
   const maxX = Math.max(...allX) + cellSize * 3
   const minY = Math.min(...allY) - cellSize * 3
   const maxY = Math.max(...allY) + cellSize * 3
-
+  
   const toGrid = (x: number, y: number) => ({
     gx: Math.round((x - minX) / cellSize),
     gy: Math.round((y - minY) / cellSize)
   })
-
+  
   const toWorld = (gx: number, gy: number) => ({
     x: gx * cellSize + minX,
     y: gy * cellSize + minY
   })
-
+  
   const start = toGrid(fromPort.x, fromPort.y)
   const goal = toGrid(toPort.x, toPort.y)
-
+  
   // Check if a cell is blocked by any room (except source/target)
   const isBlocked = (gx: number, gy: number): boolean => {
     const world = toWorld(gx, gy)
     for (const room of rooms) {
       if (room.id === fromRoomId || room.id === toRoomId) continue
-
+      
       // Check if point is inside room with generous padding (2x gridSize)
       const pad = gridSize * 2
       if (world.x >= room.x - pad && world.x <= room.x + room.width + pad &&
-        world.y >= room.y - pad && world.y <= room.y + room.height + pad) {
+          world.y >= room.y - pad && world.y <= room.y + room.height + pad) {
         return true
       }
     }
     return false
   }
-
+  
   interface Node {
     gx: number
     gy: number
@@ -1108,13 +878,13 @@ function findPathAStar(
     f: number
     parent: Node | null
   }
-
+  
   const openSet: Node[] = []
   const closedSet = new Set<string>()
-
+  
   const heuristic = (a: { gx: number; gy: number }, b: { gx: number; gy: number }) =>
     Math.abs(a.gx - b.gx) + Math.abs(a.gy - b.gy)
-
+  
   openSet.push({
     gx: start.gx,
     gy: start.gy,
@@ -1122,21 +892,21 @@ function findPathAStar(
     f: heuristic(start, goal),
     parent: null
   })
-
+  
   const directions = [
     { dx: 0, dy: -1 }, { dx: 1, dy: 0 },
     { dx: 0, dy: 1 }, { dx: -1, dy: 0 }
   ]
-
+  
   let iterations = 0
   const maxIterations = 500
-
+  
   while (openSet.length > 0 && iterations < maxIterations) {
     iterations++
-
+    
     openSet.sort((a, b) => a.f - b.f)
     const current = openSet.shift()!
-
+    
     if (current.gx === goal.gx && current.gy === goal.gy) {
       // Reconstruct path
       const path: Array<{ x: number; y: number }> = []
@@ -1151,23 +921,23 @@ function findPathAStar(
       path[path.length - 1] = { x: toPort.x, y: toPort.y }
       return simplifyPath(path)
     }
-
+    
     closedSet.add(`${current.gx},${current.gy}`)
-
+    
     for (const d of directions) {
       const ngx = current.gx + d.dx
       const ngy = current.gy + d.dy
       const key = `${ngx},${ngy}`
-
+      
       if (closedSet.has(key)) continue
       if (ngx === start.gx && ngy === start.gy) continue // Don't revisit start
       if (ngx !== goal.gx || ngy !== goal.gy) {
         if (isBlocked(ngx, ngy)) continue
       }
-
+      
       const g = current.g + 1
       const f = g + heuristic({ gx: ngx, gy: ngy }, goal)
-
+      
       const existing = openSet.find(n => n.gx === ngx && n.gy === ngy)
       if (existing) {
         if (g < existing.g) {
@@ -1180,7 +950,7 @@ function findPathAStar(
       }
     }
   }
-
+  
   return null // No path found
 }
 
@@ -1189,24 +959,24 @@ function findPathAStar(
  */
 function simplifyPath(path: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
   if (path.length <= 2) return path
-
+  
   const result: Array<{ x: number; y: number }> = [path[0]]
-
+  
   for (let i = 1; i < path.length - 1; i++) {
     const prev = result[result.length - 1]
     const curr = path[i]
     const next = path[i + 1]
-
+    
     const dx1 = Math.sign(curr.x - prev.x)
     const dy1 = Math.sign(curr.y - prev.y)
     const dx2 = Math.sign(next.x - curr.x)
     const dy2 = Math.sign(next.y - curr.y)
-
+    
     if (dx1 !== dx2 || dy1 !== dy2) {
       result.push(curr)
     }
   }
-
+  
   result.push(path[path.length - 1])
   return result
 }
@@ -1235,10 +1005,10 @@ function routeCorridors(
   const corridors: RoutedCorridor[] = []
   const gridSize = options.mapParams.gridSize ?? 40
   const clearance = Math.max(2, options.mapParams.roomClearance ?? 2)
-
+  
   // Create segment graph for path reuse
   const segmentGraph = new SegmentGraph(gridSize / 2)
-
+  
   // Sort edges to prioritize backbone connections first
   const sortedEdges = [...graph].sort((a, b) => {
     // Backbone edges first (they form the trunk)
@@ -1246,21 +1016,21 @@ function routeCorridors(
     if (!a.isBackbone && b.isBackbone) return 1
     return 0
   })
-
+  
   for (const edge of sortedEdges) {
     const fromRoom = rooms.find(r => r.id === edge.fromRoomId)
     const toRoom = rooms.find(r => r.id === edge.toRoomId)
-
+    
     if (!fromRoom || !toRoom) continue
     const obstacles = buildObstacles(rooms, clearance, [fromRoom.id, toRoom.id])
-
+    
     // Try each port combination and find valid path
     let bestPath: Array<{ x: number; y: number }> | null = null
     let bestFromPort = fromRoom.ports[0]
     let bestToPort = toRoom.ports[0]
     let bestCost = Infinity
     let usedGraphPath = false
-
+    
     const fromPorts = selectCandidatePorts(fromRoom, toRoom, 2)
     const toPorts = selectCandidatePorts(toRoom, fromRoom, 2)
 
@@ -1293,7 +1063,7 @@ function routeCorridors(
           rooms,
           [fromRoom.id, toRoom.id]
         )
-
+        
         if (graphPath && graphPath.length >= 2) {
           const length = calculatePathLength(graphPath)
           if (!pathIntersectsRooms(graphPath, rooms, [fromRoom.id, toRoom.id])) {
@@ -1308,7 +1078,7 @@ function routeCorridors(
             }
           }
         }
-
+        
         // Grid A* fallback
         let path =
           findGridPath(fp, tp, fromRoom.id, toRoom.id, rooms, gridSize, clearance) || [
@@ -1323,7 +1093,7 @@ function routeCorridors(
           const bends = path.length > 2 ? path.length - 2 : 0
           const cost = length * ROUTER_COST.lengthCost + bends * ROUTER_COST.bendPenalty
           const intersects = pathIntersectsRooms(path, rooms, [fromRoom.id, toRoom.id])
-
+          
           if (!intersects && cost < bestCost) {
             bestCost = cost
             bestPath = path
@@ -1334,33 +1104,33 @@ function routeCorridors(
         }
       }
     }
-
+    
     if (!bestPath) continue
     // snap and simplify for consistency
     bestPath = snapPath(bestPath, gridSize)
-
+    
     const corridorId = `corridor-${corridors.length}`
-
+    
     // Add path to segment graph for future reuse
     segmentGraph.addCorridorPath(corridorId, bestPath)
-
+    
     // Calculate bends
     let bends = 0
     for (let i = 1; i < bestPath.length - 1; i++) {
       const p0 = bestPath[i - 1]
       const p1 = bestPath[i]
       const p2 = bestPath[i + 1]
-
+      
       const d1x = p1.x - p0.x
       const d1y = p1.y - p0.y
       const d2x = p2.x - p1.x
       const d2y = p2.y - p1.y
-
+      
       if ((d1x !== 0 && d2y !== 0) || (d1y !== 0 && d2x !== 0)) {
         bends++
       }
     }
-
+    
     corridors.push({
       id: corridorId,
       edgeId: edge.id,
@@ -1377,11 +1147,11 @@ function routeCorridors(
         end: bestPath[idx + 1],
       })),
     })
-
+    
     bestFromPort.connectedTo = bestToPort.id
     bestToPort.connectedTo = bestFromPort.id
   }
-
+  
   return corridors
 }
 
@@ -1402,26 +1172,26 @@ function calculatePathLength(path: Array<{ x: number; y: number }>): number {
 
 function extractJunctions(corridors: RoutedCorridor[]): JunctionData[] {
   const junctionMap = new Map<string, { x: number; y: number; corridorIds: Set<string> }>()
-
+  
   // 1. Find junctions at shared path points
   for (const corridor of corridors) {
     for (const point of corridor.path) {
       const key = `${Math.round(point.x)},${Math.round(point.y)}`
-
+      
       if (!junctionMap.has(key)) {
         junctionMap.set(key, { x: point.x, y: point.y, corridorIds: new Set() })
       }
-
+      
       junctionMap.get(key)!.corridorIds.add(corridor.id)
     }
   }
-
+  
   // 2. Find junctions at corridor segment intersections
   for (let i = 0; i < corridors.length; i++) {
     for (let j = i + 1; j < corridors.length; j++) {
       const c1 = corridors[i]
       const c2 = corridors[j]
-
+      
       // Check all segment pairs
       for (let si = 0; si < c1.path.length - 1; si++) {
         for (let sj = 0; sj < c2.path.length - 1; sj++) {
@@ -1429,14 +1199,14 @@ function extractJunctions(corridors: RoutedCorridor[]): JunctionData[] {
             c1.path[si], c1.path[si + 1],
             c2.path[sj], c2.path[sj + 1]
           )
-
+          
           if (intersection) {
             const key = `${Math.round(intersection.x)},${Math.round(intersection.y)}`
-
+            
             if (!junctionMap.has(key)) {
               junctionMap.set(key, { x: intersection.x, y: intersection.y, corridorIds: new Set() })
             }
-
+            
             junctionMap.get(key)!.corridorIds.add(c1.id)
             junctionMap.get(key)!.corridorIds.add(c2.id)
           }
@@ -1444,10 +1214,10 @@ function extractJunctions(corridors: RoutedCorridor[]): JunctionData[] {
       }
     }
   }
-
+  
   // Convert to junctions (only points with 2+ corridors)
   const junctions: JunctionData[] = []
-
+  
   for (const [, data] of junctionMap) {
     if (data.corridorIds.size >= 2) {
       junctions.push({
@@ -1459,7 +1229,7 @@ function extractJunctions(corridors: RoutedCorridor[]): JunctionData[] {
       })
     }
   }
-
+  
   return junctions
 }
 
@@ -1474,15 +1244,15 @@ function getSegmentIntersection(
   const d1y = p2.y - p1.y
   const d2x = p4.x - p3.x
   const d2y = p4.y - p3.y
-
+  
   const cross = d1x * d2y - d1y * d2x
-
+  
   // Parallel segments
   if (Math.abs(cross) < 0.0001) return null
-
+  
   const t = ((p3.x - p1.x) * d2y - (p3.y - p1.y) * d2x) / cross
   const u = ((p3.x - p1.x) * d1y - (p3.y - p1.y) * d1x) / cross
-
+  
   // Check if intersection is within both segments
   if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
     return {
@@ -1490,7 +1260,7 @@ function getSegmentIntersection(
       y: p1.y + t * d1y
     }
   }
-
+  
   return null
 }
 
@@ -1505,32 +1275,32 @@ function postProcess(
 ): CandidateData {
   let { corridors, junctions, ...rest } = data
   const gridSize = options.mapParams.gridSize ?? 40
-
+  
   // Simplify paths (always for all modes)
   if (config.enableSimplify) {
     corridors = simplifyCorridorPaths(corridors)
   }
-
+  
   // Coalesce overlapping segments using SegmentGraph
   if (config.enableCoalesce) {
     const result = coalesceCorridors(corridors, gridSize)
     corridors = result.corridors
     junctions = [...junctions, ...result.newJunctions]
   }
-
+  
   // Normalize junctions
   if (config.enableJunctionNorm) {
     junctions = normalizeJunctions(junctions)
   }
-
+  
   // Beautify (snap to grid)
   if (config.enableBeautify) {
     corridors = beautifyCorridors(corridors, gridSize)
   }
-
+  
   // Generate MapJSON data
   const mapData = generateMapData({ ...rest, corridors, junctions }, options)
-
+  
   return { ...rest, corridors, junctions, mapData }
 }
 
@@ -1542,18 +1312,18 @@ function generateMapData(
   options: QualityPipelineOptions
 ): MapJSONCompat {
   const { placedRooms, corridors, junctions, rooms, graph } = data
-
+  
   // Calculate grid dimensions
   let maxX = 0, maxY = 0
   for (const room of placedRooms) {
     maxX = Math.max(maxX, room.x + room.width)
     maxY = Math.max(maxY, room.y + room.height)
   }
-
+  
   const gridSize = options.mapParams.gridSize ?? 40
   const gridWidth = Math.ceil(maxX / gridSize) + 2
   const gridHeight = Math.ceil(maxY / gridSize) + 2
-
+  
   // Convert placed rooms to layout rooms
   const layoutRooms = placedRooms.map(pr => {
     const roomProgram = rooms.find(r => r.id === pr.programId)
@@ -1575,7 +1345,7 @@ function generateMapData(
       }))
     }
   })
-
+  
   // Build room ID lookup from graph edges
   const portToRoomMap = new Map<string, string>()
   for (const pr of placedRooms) {
@@ -1583,7 +1353,7 @@ function generateMapData(
       portToRoomMap.set(port.id, pr.id)
     }
   }
-
+  
   // Convert corridors to connectors
   const connectors = corridors.map(c => {
     // Find edge to get corridor type
@@ -1595,7 +1365,7 @@ function generateMapData(
       start: { x: p.x, y: p.y },
       end: { x: c.path[idx + 1].x, y: c.path[idx + 1].y },
     }))
-
+    
     return {
       id: c.id,
       type: c.type ?? edge?.kind ?? 'corridor',
@@ -1615,7 +1385,7 @@ function generateMapData(
       segments,
     }
   })
-
+  
   // Convert junctions
   const layoutJunctions = junctions.map(j => ({
     id: j.id,
@@ -1623,7 +1393,7 @@ function generateMapData(
     y: j.y,
     corridorIds: j.corridorIds
   }))
-
+  
   return {
     version: '1.0.0',
     meta: {
@@ -1665,28 +1435,28 @@ function simplifyCorridorPaths(corridors: RoutedCorridor[]): RoutedCorridor[] {
     if (!c.path || c.path.length < 2) {
       return c
     }
-
+    
     const simplified: Array<{ x: number; y: number }> = [c.path[0]]
-
+    
     for (let i = 1; i < c.path.length - 1; i++) {
       const prev = simplified[simplified.length - 1]
       const curr = c.path[i]
       const next = c.path[i + 1]
-
+      
       // Check if collinear
       const dx1 = curr.x - prev.x
       const dy1 = curr.y - prev.y
       const dx2 = next.x - curr.x
       const dy2 = next.y - curr.y
-
+      
       // Not collinear if cross product != 0
       if (dx1 * dy2 !== dy1 * dx2) {
         simplified.push(curr)
       }
     }
-
+    
     simplified.push(c.path[c.path.length - 1])
-
+    
     return { ...c, path: simplified, bends: Math.max(0, simplified.length - 2) }
   })
 }
@@ -1707,7 +1477,7 @@ function coalesceCorridors(
   // Use SegmentGraph for intelligent coalescing
   const tolerance = Math.max(5, gridSize / 4)
   const { updatedCorridors, junctions } = buildSegmentGraph(corridors, tolerance)
-
+  
   return { corridors: updatedCorridors, newJunctions: junctions }
 }
 
@@ -1715,12 +1485,12 @@ function normalizeJunctions(junctions: JunctionData[]): JunctionData[] {
   // Simple implementation - merge nearby junctions
   const merged: JunctionData[] = []
   const tolerance = 10
-
+  
   for (const j of junctions) {
-    const existing = merged.find(m =>
+    const existing = merged.find(m => 
       Math.abs(m.x - j.x) < tolerance && Math.abs(m.y - j.y) < tolerance
     )
-
+    
     if (existing) {
       existing.degree += j.degree
       existing.corridorIds = [...new Set([...existing.corridorIds, ...j.corridorIds])]
@@ -1728,7 +1498,7 @@ function normalizeJunctions(junctions: JunctionData[]): JunctionData[] {
       merged.push({ ...j })
     }
   }
-
+  
   return merged
 }
 
@@ -1749,27 +1519,27 @@ function beautifyCorridors(corridors: RoutedCorridor[], gridSize: number): Route
 function calculateDiagnostics(candidate: GenerationCandidate): PipelineDiagnostics {
   const { data } = candidate
   const junctionStats = calculateJunctionDegreeStats(data.junctions)
-
+  
   // Count corridor-room intersections from validation errors
   const corridorRoomIntersections = candidate.validationErrors.filter(
     e => e.type === 'CorridorIntersectsRoom'
   ).length
-
+  
   // Count overlaps
   const overlaps = candidate.validationErrors.filter(
     e => e.type === 'RoomsOverlap'
   ).length
-
+  
   // Calculate total corridor length
   let totalCorridorLength = 0
   let totalBends = 0
   let microSegmentCount = 0
   const minSegmentLength = 10
-
+  
   for (const corridor of data.corridors) {
     totalCorridorLength += corridor.length
     totalBends += corridor.bends
-
+    
     for (let i = 0; i < corridor.path.length - 1; i++) {
       const p1 = corridor.path[i]
       const p2 = corridor.path[i + 1]
@@ -1779,13 +1549,13 @@ function calculateDiagnostics(candidate: GenerationCandidate): PipelineDiagnosti
       }
     }
   }
-
+  
   // Calculate cycles
   const cycleCount = Math.max(0, data.graph.length - data.placedRooms.length + 1)
-
+  
   // Calculate chokepoints (simplified)
   const chokepointCount = 0 // Would require full graph analysis
-
+  
   return {
     overlaps,
     corridorRoomIntersections,
@@ -1810,52 +1580,52 @@ export async function runQualityPipeline(
 ): Promise<PipelineResult> {
   const startTime = performance.now()
   const stageTimings: StageTiming[] = []
-
+  
   // Get quality config
   const config = {
     ...QUALITY_MODE_CONFIGS[options.qualityMode],
     ...options.qualityConfig,
   }
-
+  
   const allCandidates: GenerationCandidate[] = []
   let bestCandidate: GenerationCandidate | null = null
   let earlyExit = false
   let lastUpdateTime = 0
   let updateCount = 0
-
+  
   const maxUpdates = options.refinement?.maxUpdates ?? 3
   const minUpdateInterval = options.refinement?.minUpdateInterval ?? 200
-
+  
   // Generate and evaluate candidates
   let bestInvalidCandidate: GenerationCandidate | null = null
-
+  
   for (let i = 0; i < config.maxCandidates; i++) {
     // Check abort signal
     if (options.refinement?.abortSignal?.aborted) {
       break
     }
-
+    
     // Check time budget
     const elapsed = performance.now() - startTime
     if (elapsed > config.budgetMs.max) {
       break
     }
-
+    
     // Generate candidate
     const candidate = generateCandidate(i, options.seed, options, config)
     allCandidates.push(candidate)
-
+    
     // Track best invalid candidate as fallback
     if (!candidate.isValid) {
       if (!bestInvalidCandidate || candidate.score > bestInvalidCandidate.score) {
         bestInvalidCandidate = candidate
       }
     }
-
+    
     // Update best if this is better
     if (candidate.isValid && (!bestCandidate || candidate.score > bestCandidate.score)) {
       bestCandidate = candidate
-
+      
       // Send update if enough time has passed
       if (options.refinement?.onUpdate) {
         const now = performance.now()
@@ -1873,7 +1643,7 @@ export async function runQualityPipeline(
           updateCount++
         }
       }
-
+      
       // Check early exit
       const normalizedScore = (bestCandidate.score + 100) / 200 // Rough normalization
       if (normalizedScore >= config.qualityThreshold) {
@@ -1882,14 +1652,14 @@ export async function runQualityPipeline(
       }
     }
   }
-
+  
   // Fallback to best invalid candidate if no valid ones found
   if (!bestCandidate && bestInvalidCandidate) {
-    console.warn('[Quality] No valid candidates, using best invalid candidate with errors:',
+    console.warn('[Quality] No valid candidates, using best invalid candidate with errors:', 
       bestInvalidCandidate.validationErrors.map(e => e.message).join('; '))
     bestCandidate = bestInvalidCandidate
   }
-
+  
   // Send final update
   if (options.refinement?.onUpdate && bestCandidate) {
     const finalUpdate: RefinementUpdate = {
@@ -1902,23 +1672,23 @@ export async function runQualityPipeline(
     }
     options.refinement.onUpdate(finalUpdate)
   }
-
+  
   const totalTimeMs = performance.now() - startTime
-
+  
   // Calculate diagnostics
-  const diagnostics = bestCandidate
+  const diagnostics = bestCandidate 
     ? calculateDiagnostics(bestCandidate)
     : {
-      overlaps: 0,
-      corridorRoomIntersections: 0,
-      totalCorridorLength: 0,
-      totalBends: 0,
-      cycleCount: 0,
-      chokepointCount: 0,
-      junctionDegreeDistribution: {},
-      microSegmentCount: 0,
-    }
-
+        overlaps: 0,
+        corridorRoomIntersections: 0,
+        totalCorridorLength: 0,
+        totalBends: 0,
+        cycleCount: 0,
+        chokepointCount: 0,
+        junctionDegreeDistribution: {},
+        microSegmentCount: 0,
+      }
+  
   return {
     bestCandidate,
     allCandidates: options.debug ? allCandidates : [],

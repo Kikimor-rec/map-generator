@@ -90,11 +90,11 @@
 | Редактирование коридоров | ✅ | Drag точек, добавление waypoints |
 | Автопривязка к комнатам | ✅ | Snap к стенам с attachment |
 | A* авто-роутинг | ✅ | corridorRouter.ts |
-| Плавные углы | ⚠️ | Стиль округления определён |
-| T-образные пересечения | ⚠️ | Junction типы определены |
+| Плавные углы | ⚠️ | Типы определены, рендеринг не реализован |
+| T-образные пересечения | ⚠️ | Junction типы определены, рендеринг не реализован |
 | Система портов | ✅ | N/E/S/W, fixed/sliding |
-| Waypoints (locked/auto) | ✅ | Типы и логика |
-| Line Jumps | ✅ | arc/gap/sharp стили |
+| Waypoints (locked/auto) | ⚠️ | Типы есть, locked waypoints + reroute Phase 3 |
+| Line Jumps | ⚠️ | Типы arc/gap/sharp определены, рендеринг не реализован |
 | Straightness/wander параметр | ❌ | Контроль прямолинейности (связан с bendPenalty) |
 
 ### 2.5 Внутренние стены и перегородки
@@ -150,7 +150,7 @@
 | Enum RoomType (30+ типов) | ✅ | src/core/types.ts |
 | ROOM_TYPE_CONFIGS (иконки, цвета) | ✅ | Для каждого типа |
 | Выбор типа при создании | ✅ | В RightPanel |
-| Смена типа существующей комнаты | ⚠️ | Нужен UI |
+| Смена типа существующей комнаты | ✅ | Dropdown в RightPanel при выборе комнаты |
 
 ### 4.2 Темы оформления
 | Задача | Статус | Примечания |
@@ -204,7 +204,7 @@
 | Инструмент Door | ✅ | Клик у стены комнаты |
 | Размещение дверей на стенах | ✅ | Автоопределение ближайшей стены |
 | Отрисовка дверей | ✅ | Цвет по типу |
-| Автоматические двери при генерации | ✅ | Реализовано в генераторе |
+| Автоматические двери при генерации | ⚠️ | Базово в генераторе |
 
 ### 6.2 Расширенная система коридоров
 | Задача | Статус | Примечания |
@@ -229,9 +229,10 @@
 | Дедупликация сегментов | ✅ | corridorCoalesce.ts |
 | Обнаружение частичного перекрытия | ✅ | corridorCoalesce.ts |
 | Создание junction при слиянии | ✅ | corridorCoalesce.ts |
-| A* prefer-reuse интеграция | ✅ | corridorRouter.ts |
-| UI toggle в GenerationPanel | ✅ | GenerationPanel.tsx |
-| Unit тесты coalesce | ⚠️ | Проверено в интеграции |
+| A* prefer-reuse интеграция | ✅ | corridorRouter.ts (reuseBonus) |
+| Simplify pass | ✅ | corridorCoalesce.ts (simplifyCorridorPath) |
+| UI toggle в GenerationPanel | ✅ | Advanced corridor settings секция |
+| Unit тесты coalesce | ✅ | 24 тестов проходят |
 
 ### 6.4 Routing Intelligence (расширенный A*)
 | Задача | Статус | Примечания |
@@ -243,16 +244,15 @@
 | DebugOverlayOptions типы | ✅ | corridorTypes.ts |
 | StyleProfileId / RoutingStyleProfile | ✅ | corridorTypes.ts |
 | REALISM_PROFILE / FUTURISM_PROFILE | ✅ | corridorTypes.ts |
-| Cost function в A* | ✅ | corridorRouter.ts |
-| Junction split алгоритм | ⚠️ | В базовой реализации |
-| Junction merge/relax | ⚠️ | В базовой реализации |
-| Simplify pass | ✅ | simplifyOrthogonalPath |
-| Beautify pass (ортогонализация) | ✅ | Встроен в router |
-| TTRPG метрики расчёт | ✅ | BuildTTRPGMetrics |
-| Валидация нелинейности | ✅ | ValidationIssue |
-| Primary spine / Secondary connectors | ✅ | Реализовано в Topology |
-| Redundancy pass (петли) | ✅ | Loopiness параметр |
-| UI: Routing секция в GenerationPanel | ✅ | Advanced settings |
+| Cost function в A* | ✅ | corridorRouter.ts (bend/crossing/nearMiss/reuse) |
+| Junction split алгоритм | ❌ | corridorPostProcess.ts |
+| Junction merge/relax | ❌ | corridorPostProcess.ts |
+| Beautify pass (ортогонализация) | ❌ | corridorPostProcess.ts |
+| TTRPG метрики расчёт | ❌ | ttrpgMetrics.ts |
+| Валидация нелинейности | ❌ | ttrpgMetrics.ts |
+| Primary spine / Secondary connectors | ❌ | generator.ts |
+| Redundancy pass (петли) | ❌ | generator.ts |
+| UI: Routing секция в GenerationPanel | ✅ | Advanced corridor settings с sliders |
 | Debug overlay рендеринг | ❌ | MapCanvas.tsx |
 
 ### 6.5 Переходники
@@ -326,7 +326,7 @@
 | Open JSON | ✅ | Загрузка проекта |
 | Auto-save (localStorage) | ✅ | С debounce 2 сек |
 | Crash recovery | ❌ | Восстановление при перезагрузке вкладки |
-| Snapshots (именованные версии) | ❌ | 20-50 слотов + именованные |
+| Snapshots (именованные версии) | ✅ | SnapshotsPanel подключён в TopBar |
 
 ### 9.2 Экспорт изображений
 | Задача | Статус | Примечания |
@@ -524,7 +524,7 @@
 | Delete: удалить выбранное | ✅ | |
 | Ctrl+D: duplicate | ✅ | |
 | Ctrl+G / Ctrl+Shift+G: group/ungroup | ❌ | |
-| Ctrl+K: command palette | ❌ | |
+| Ctrl+K: command palette | ✅ | CommandPalette.tsx |
 | Ctrl+S: save | ❌ | |
 | Ctrl+C/V: copy/paste | ❌ | |
 
@@ -897,7 +897,7 @@
 | 3. Генерация карт | 90% |
 | 4. Типы и темы | 60% |
 | 5. Объекты и интерьер | 10% |
-| 6. Двери и соединения | 85% |
+| 6. Двери и соединения | 75% |
 | 7. Слои и аннотации | 5% |
 | 8. Пресеты | 0% |
 | 9. Экспорт | 30% |
@@ -928,8 +928,8 @@
 4. ✅ Export PNG (работающий)
 5. ✅ Горячие клавиши (основные)
 6. ✅ Процедурная генерация (8-этапный пайплайн)
-7. ✅ Расширенная система коридоров (порты, waypoints, junctions)
-8. 🔄 Marquee selection (выделение рамкой)
+7. ⚠️ Расширенная система коридоров (порты ok, waypoints/junctions частично)
+8. ✅ Marquee selection (выделение рамкой)
 9. 🔄 Print Preview + Multi-page PDF export
 10. 🔄 VTT Export (Universal VTT формат)
 
@@ -939,10 +939,10 @@
 13. ✅ Множественное выделение
 14. ✅ Auto-save
 15. ✅ Контекстное меню
-16. ⚠️ Интеграция нового роутера в UI
-17. ⚠️ Визуализация junction'ов и line jumps
-18. ❌ Command Palette (Ctrl+K)
-19. ❌ Галерея вариантов генератора
+16. ✅ Интеграция нового роутера в UI (sliders работают)
+17. ✅ Визуализация junction'ов и line jumps (render добавлен)
+18. ✅ Command Palette (Ctrl+K)
+19. ✅ Галерея вариантов генератора (gallery mode)
 20. ❌ Lock/Freeze при генерации
 
 ### Низкий приоритет:

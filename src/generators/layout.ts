@@ -2,6 +2,11 @@
  * Layout Geometry Generator
  * Stage 4-5 of the generation pipeline: Position rooms and route connectors
  * Based on specification from 05_layout_geometry.md
+ * 
+ * Key improvements:
+ * - Spine-based layout for ships (bow-to-stern main corridor)
+ * - Hub-and-spoke for stations
+ * - Zone-aware placement (command at bow, engineering at stern)
  */
 
 import type {
@@ -19,13 +24,18 @@ import type {
 } from './types'
 import type { SeededRNG } from './types'
 import { createRNG, generateStableId } from './rng'
+import { 
+  generateSpineForArchetype, 
+  getZonePlacement,
+  type SpineStructure 
+} from './spineLayout'
 
 // ============================================================================
 // CONSTANTS
 // ============================================================================
 
 const GRID_SIZE = 40 // Base grid unit in pixels
-const MIN_ROOM_GAP = 3 // Minimum tiles between rooms (enough for corridor)
+const MIN_ROOM_GAP = 2 // Minimum tiles between rooms (reduced for tighter layout)
 const CORRIDOR_WIDTH = 1.2 // Width in tiles (match corridor gap)
 const CORRIDOR_CLEARANCE = 1 // Tiles to keep clear around corridors
 const SNAP_STEP = GRID_SIZE / 2
@@ -106,28 +116,51 @@ function generateDeckLayout(
 ): DeckLayout {
   // Phase 1: Calculate grid bounds based on total room area
   const totalTiles = rooms.reduce((sum, r) => sum + r.estimatedWidth * r.estimatedHeight, 0)
-  // Use smaller multiplier (2.5) for more compact layout
-  const gridDimension = Math.ceil(Math.sqrt(totalTiles * 2.5))
   
-  // Minimum size based on number of rooms (smaller for fewer rooms)
-  const minSize = Math.max(15, Math.ceil(rooms.length * 2))
-  const gridWidth = Math.max(minSize, gridDimension)
-  const gridHeight = Math.max(minSize, gridDimension)
+  // Phase 1b: Generate spine structure for this archetype
+  const spine = generateSpineForArchetype(
+    request.archetype,
+    rooms.length,
+    request,
+    rng
+  )
   
-  // Phase 2: Place rooms using grammar-based placement
-  const placedRooms = placeRooms(rooms, connectors, gridWidth, gridHeight, request, rng)
+  // Calculate dimensions based on spine bounds and archetype
+  let gridWidth: number
+  let gridHeight: number
+  
+  if (request.archetype === 'ship') {
+    // Ships are elongated (2.5:1 to 3:1 ratio, horizontal)
+    const area = totalTiles * 2.2  // More compact
+    gridWidth = Math.max(spine.bounds.width + 4, Math.ceil(Math.sqrt(area * 2.5)))
+    gridHeight = Math.max(spine.bounds.height + 4, Math.ceil(gridWidth / 2.5))
+  } else if (request.archetype === 'station') {
+    // Stations are roughly square with hub
+    const gridDimension = Math.ceil(Math.sqrt(totalTiles * 2.5))
+    gridWidth = Math.max(spine.bounds.width + 4, gridDimension)
+    gridHeight = Math.max(spine.bounds.height + 4, gridDimension)
+  } else {
+    // Outposts are compact squares
+    const gridDimension = Math.ceil(Math.sqrt(totalTiles * 2))
+    gridWidth = Math.max(spine.bounds.width + 4, gridDimension)
+    gridHeight = Math.max(spine.bounds.height + 4, gridDimension)
+  }
+  
+  // Phase 2: Place rooms using spine-aware placement
+  const placedRooms = placeRoomsWithSpine(rooms, connectors, gridWidth, gridHeight, spine, request, rng)
   
   // Phase 3: Calculate ports for each room
   for (const placed of placedRooms) {
     placed.room.ports = calculatePorts(placed.room, placed.rect, placedRooms, connectors)
   }
   
-  // Phase 4: Route connectors between rooms
-  const layoutConnectors = routeConnectors(
+  // Phase 4: Route connectors between rooms (spine-aware)
+  const layoutConnectors = routeConnectorsWithSpine(
     connectors,
     placedRooms,
     gridWidth,
     gridHeight,
+    spine,
     request,
     rng
   )
@@ -230,6 +263,353 @@ function placeRooms(
   return placed
 }
 
+// ============================================================================
+// SPINE-AWARE ROOM PLACEMENT
+// ============================================================================
+
+/**
+ * Place rooms using spine structure as guide
+ * Rooms are placed near spine nodes based on their zone
+ */
+function placeRoomsWithSpine(
+  rooms: Array<{ id: string; roomType: string; label: string; estimatedWidth: number; estimatedHeight: number; zone: string; importance: string; isExterior?: boolean }>,
+  connectors: GraphConnector[],
+  gridWidth: number,
+  gridHeight: number,
+  spine: SpineStructure,
+  request: GenerationRequest,
+  rng: SeededRNG
+): PlacedRoom[] {
+  const placed: PlacedRoom[] = []
+  const occupiedCells = new Set<string>()
+  
+  // Get zone placement rules
+  const zonePlacements = getZonePlacement(request.archetype, request.subtype || '')
+  
+  // Sort rooms: primary first, then by zone priority
+  const sortedRooms = [...rooms].sort((a, b) => {
+    const importanceOrder = { primary: 0, secondary: 1, tertiary: 2 }
+    const aOrder = importanceOrder[a.importance as keyof typeof importanceOrder] ?? 2
+    const bOrder = importanceOrder[b.importance as keyof typeof importanceOrder] ?? 2
+    
+    if (aOrder !== bOrder) return aOrder - bOrder
+    
+    // Sort by zone priority
+    const aZonePriority = zonePlacements.find(z => z.zone === a.zone)?.priority ?? 10
+    const bZonePriority = zonePlacements.find(z => z.zone === b.zone)?.priority ?? 10
+    if (aZonePriority !== bZonePriority) return aZonePriority - bZonePriority
+    
+    return (b.estimatedWidth * b.estimatedHeight) - (a.estimatedWidth * a.estimatedHeight)
+  })
+  
+  // Calculate spine offset to center it in grid
+  const spineOffsetX = Math.floor((gridWidth - spine.bounds.width) / 2)
+  const spineOffsetY = Math.floor((gridHeight - spine.bounds.height) / 2)
+  
+  // Mark spine corridor cells as occupied (with clearance)
+  for (const segment of spine.segments) {
+    const fromNode = spine.nodes.find(n => n.id === segment.from)
+    const toNode = spine.nodes.find(n => n.id === segment.to)
+    if (!fromNode || !toNode) continue
+    
+    // Mark cells along spine segment
+    const x1 = fromNode.position.x + spineOffsetX
+    const y1 = fromNode.position.y + spineOffsetY
+    const x2 = toNode.position.x + spineOffsetX
+    const y2 = toNode.position.y + spineOffsetY
+    
+    const steps = Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1)) + 1
+    for (let i = 0; i <= steps; i++) {
+      const t = steps === 0 ? 0 : i / steps
+      const x = Math.round(x1 + (x2 - x1) * t)
+      const y = Math.round(y1 + (y2 - y1) * t)
+      
+      // Mark with clearance
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          occupiedCells.add(`${x + dx},${y + dy}`)
+        }
+      }
+    }
+  }
+  
+  for (const room of sortedRooms) {
+    const width = room.estimatedWidth
+    const height = room.estimatedHeight
+    
+    // Find best spine node for this room's zone
+    const targetNode = findTargetSpineNode(room.zone, spine, zonePlacements, spineOffsetX, spineOffsetY)
+    
+    // Find position near the target node
+    const position = findPositionNearSpineNode(
+      width,
+      height,
+      targetNode,
+      placed,
+      occupiedCells,
+      connectors,
+      room,
+      gridWidth,
+      gridHeight,
+      spine,
+      spineOffsetX,
+      spineOffsetY,
+      rng
+    )
+    
+    if (position) {
+      const rect: Rect = {
+        x: position.x,
+        y: position.y,
+        width,
+        height
+      }
+      
+      // Mark cells as occupied
+      for (let dx = -1; dx <= width; dx++) {
+        for (let dy = -1; dy <= height; dy++) {
+          occupiedCells.add(`${position.x + dx},${position.y + dy}`)
+        }
+      }
+      
+      const layoutRoom: LayoutRoom = {
+        id: room.id,
+        roomType: room.roomType,
+        label: room.label,
+        x: position.x * GRID_SIZE,
+        y: position.y * GRID_SIZE,
+        width: width * GRID_SIZE,
+        height: height * GRID_SIZE,
+        gridX: position.x,
+        gridY: position.y,
+        gridWidth: width,
+        gridHeight: height,
+        zone: room.zone,
+        ports: [],
+        isExterior: room.isExterior || false
+      }
+      
+      placed.push({ room: layoutRoom, rect })
+    }
+  }
+  
+  return placed
+}
+
+/**
+ * Find the best spine node for a room based on its zone
+ */
+function findTargetSpineNode(
+  zone: string,
+  spine: SpineStructure,
+  zonePlacements: Array<{ zone: string; anchor: string; priority: number }>,
+  offsetX: number,
+  offsetY: number
+): Point | null {
+  const placement = zonePlacements.find(z => z.zone === zone)
+  if (!placement) {
+    // Default: center of spine
+    const centerNode = spine.nodes.find(n => n.type === 'junction') || spine.nodes[0]
+    return centerNode ? { 
+      x: centerNode.position.x + offsetX, 
+      y: centerNode.position.y + offsetY 
+    } : null
+  }
+  
+  // Find node matching the anchor
+  let targetNode: typeof spine.nodes[0] | undefined
+  
+  switch (placement.anchor) {
+    case 'bow':
+      // First terminal or leftmost node
+      targetNode = spine.nodes.find(n => n.zone === 'command') ||
+                   spine.nodes.reduce((min, n) => n.position.x < min.position.x ? n : min, spine.nodes[0])
+      break
+    case 'stern':
+      // Last terminal or rightmost node
+      targetNode = spine.nodes.find(n => n.zone === 'engineering') ||
+                   spine.nodes.reduce((max, n) => n.position.x > max.position.x ? n : max, spine.nodes[0])
+      break
+    case 'hub':
+      // Central hub node
+      targetNode = spine.nodes.find(n => n.id === 'hub') ||
+                   spine.nodes.find(n => n.type === 'junction')
+      break
+    case 'port':
+      // Upper nodes (lower Y)
+      targetNode = spine.nodes.find(n => n.id.includes('port') || n.id.includes('upper')) ||
+                   spine.nodes.reduce((min, n) => n.position.y < min.position.y ? n : min, spine.nodes[0])
+      break
+    case 'starboard':
+      // Lower nodes (higher Y)
+      targetNode = spine.nodes.find(n => n.id.includes('starboard') || n.id.includes('lower')) ||
+                   spine.nodes.reduce((max, n) => n.position.y > max.position.y ? n : max, spine.nodes[0])
+      break
+    case 'center':
+    default:
+      // Middle junction
+      const junctions = spine.nodes.filter(n => n.type === 'junction' || n.type === 'anchor')
+      targetNode = junctions[Math.floor(junctions.length / 2)] || spine.nodes[0]
+  }
+  
+  return targetNode ? { 
+    x: targetNode.position.x + offsetX, 
+    y: targetNode.position.y + offsetY 
+  } : null
+}
+
+/**
+ * Find a valid position near a spine node
+ */
+function findPositionNearSpineNode(
+  width: number,
+  height: number,
+  targetNode: Point | null,
+  placed: PlacedRoom[],
+  occupied: Set<string>,
+  connectors: GraphConnector[],
+  room: { id: string; importance: string; zone: string },
+  gridWidth: number,
+  gridHeight: number,
+  spine: SpineStructure,
+  spineOffsetX: number,
+  spineOffsetY: number,
+  rng: SeededRNG
+): Point | null {
+  const candidates: Array<{ pos: Point; score: number }> = []
+  
+  // If we have a target node, search around it
+  if (targetNode) {
+    // Search in expanding rings around target node
+    for (let radius = 2; radius <= 8; radius++) {
+      for (let dx = -radius; dx <= radius; dx++) {
+        for (let dy = -radius; dy <= radius; dy++) {
+          // Only check perimeter of ring
+          if (Math.abs(dx) !== radius && Math.abs(dy) !== radius) continue
+          
+          const pos = { x: targetNode.x + dx, y: targetNode.y + dy }
+          
+          if (isPositionValid(pos, width, height, occupied, gridWidth, gridHeight)) {
+            const score = scorePositionNearSpine(pos, width, height, targetNode, spine, spineOffsetX, spineOffsetY, placed, room)
+            candidates.push({ pos, score })
+          }
+        }
+      }
+      
+      // If we found enough candidates, stop expanding
+      if (candidates.length >= 5) break
+    }
+  }
+  
+  // Fallback: check positions near already placed rooms
+  if (candidates.length === 0) {
+    const connectedTo = connectors
+      .filter(c => c.fromRoomId === room.id || c.toRoomId === room.id)
+      .map(c => c.fromRoomId === room.id ? c.toRoomId : c.fromRoomId)
+    
+    const connectedPlaced = placed.filter(p => connectedTo.includes(p.room.id))
+    
+    for (const connected of connectedPlaced) {
+      const adjacentPositions = getAdjacentPositions(connected.rect, width, height, MIN_ROOM_GAP)
+      
+      for (const pos of adjacentPositions) {
+        if (isPositionValid(pos, width, height, occupied, gridWidth, gridHeight)) {
+          const score = scorePositionNearSpine(
+            pos, width, height, 
+            targetNode || { x: connected.rect.x, y: connected.rect.y }, 
+            spine, spineOffsetX, spineOffsetY, placed, room
+          )
+          candidates.push({ pos, score })
+        }
+      }
+    }
+  }
+  
+  // Last resort: random valid positions
+  if (candidates.length === 0) {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const pos = {
+        x: rng.randomInt(2, gridWidth - width - 2),
+        y: rng.randomInt(2, gridHeight - height - 2)
+      }
+      
+      if (isPositionValid(pos, width, height, occupied, gridWidth, gridHeight)) {
+        candidates.push({ pos, score: 0 })
+        if (candidates.length >= 5) break
+      }
+    }
+  }
+  
+  if (candidates.length === 0) {
+    // Absolute last resort: scan grid
+    for (let y = 1; y < gridHeight - height - 1; y++) {
+      for (let x = 1; x < gridWidth - width - 1; x++) {
+        if (isPositionValid({ x, y }, width, height, occupied, gridWidth, gridHeight)) {
+          return { x, y }
+        }
+      }
+    }
+    return null
+  }
+  
+  // Pick best candidate
+  candidates.sort((a, b) => b.score - a.score)
+  return rng.pick(candidates.slice(0, Math.min(3, candidates.length))).pos
+}
+
+/**
+ * Score a position based on proximity to spine and target node
+ */
+function scorePositionNearSpine(
+  pos: Point,
+  width: number,
+  height: number,
+  targetNode: Point,
+  spine: SpineStructure,
+  spineOffsetX: number,
+  spineOffsetY: number,
+  placed: PlacedRoom[],
+  room: { zone?: string }
+): number {
+  let score = 100
+  
+  const centerX = pos.x + width / 2
+  const centerY = pos.y + height / 2
+  
+  // Prefer positions close to target node
+  const distToTarget = Math.abs(centerX - targetNode.x) + Math.abs(centerY - targetNode.y)
+  score -= distToTarget * 3
+  
+  // Prefer positions perpendicular to spine (not blocking it)
+  // Find nearest spine segment and check if we're beside it, not on it
+  let minDistToSpine = Infinity
+  for (const node of spine.nodes) {
+    const nodeX = node.position.x + spineOffsetX
+    const nodeY = node.position.y + spineOffsetY
+    const dist = Math.abs(centerX - nodeX) + Math.abs(centerY - nodeY)
+    minDistToSpine = Math.min(minDistToSpine, dist)
+  }
+  
+  // Sweet spot: 2-4 tiles from spine (close but not blocking)
+  if (minDistToSpine >= 2 && minDistToSpine <= 4) {
+    score += 20
+  } else if (minDistToSpine < 2) {
+    score -= 30  // Too close, might block spine
+  }
+  
+  // Prefer positions close to already placed rooms (for compactness)
+  for (const p of placed) {
+    const pCenterX = p.rect.x + p.rect.width / 2
+    const pCenterY = p.rect.y + p.rect.height / 2
+    const dist = Math.sqrt((centerX - pCenterX) ** 2 + (centerY - pCenterY) ** 2)
+    if (dist < 6) {
+      score += 10 - dist  // Bonus for being close to other rooms
+    }
+  }
+  
+  return score
+}
+
 type LayoutPattern = 'linear' | 'hub' | 'grid' | 'organic'
 
 function getLayoutPattern(request: GenerationRequest): LayoutPattern {
@@ -257,8 +637,23 @@ function findRoomPosition(
   pattern: LayoutPattern,
   rng: SeededRNG
 ): Point | null {
-  // For first room, place near center
+  // For first room, place based on pattern and zone
   if (placed.length === 0) {
+    if (pattern === 'linear') {
+      // Ships: command at bow (left), engineering at stern (right)
+      if (room.zone === 'command') {
+        return {
+          x: 2,  // Near left edge (bow)
+          y: Math.floor((gridHeight - height) / 2)  // Centered vertically
+        }
+      } else if (room.zone === 'engineering' || room.zone === 'power') {
+        return {
+          x: gridWidth - width - 2,  // Near right edge (stern)
+          y: Math.floor((gridHeight - height) / 2)
+        }
+      }
+    }
+    // Default: center
     return {
       x: Math.floor((gridWidth - width) / 2),
       y: Math.floor((gridHeight - height) / 2)
@@ -282,7 +677,7 @@ function findRoomPosition(
       
       for (const pos of adjacentPositions) {
         if (isPositionValid(pos, width, height, occupied, gridWidth, gridHeight)) {
-          const score = scorePosition(pos, width, height, connectedPlaced, pattern, gridWidth, gridHeight)
+          const score = scorePosition(pos, width, height, connectedPlaced, pattern, gridWidth, gridHeight, room)
           candidates.push({ pos, score })
         }
       }
@@ -298,7 +693,7 @@ function findRoomPosition(
       }
       
       if (isPositionValid(pos, width, height, occupied, gridWidth, gridHeight)) {
-        const score = scorePosition(pos, width, height, connectedPlaced, pattern, gridWidth, gridHeight)
+        const score = scorePosition(pos, width, height, connectedPlaced, pattern, gridWidth, gridHeight, room)
         candidates.push({ pos, score })
         
         if (candidates.length >= 10) break
@@ -376,7 +771,8 @@ function scorePosition(
   connectedRooms: PlacedRoom[],
   pattern: LayoutPattern,
   gridWidth: number,
-  gridHeight: number
+  gridHeight: number,
+  room?: { zone?: string; importance?: string }
 ): number {
   let score = 100
   
@@ -395,13 +791,47 @@ function scorePosition(
   const gridCenterX = gridWidth / 2
   const gridCenterY = gridHeight / 2
   
+  // Zone-based placement for ships (bow = left, stern = right)
+  if (pattern === 'linear' && room?.zone) {
+    const normalizedX = centerX / gridWidth // 0 = bow, 1 = stern
+    
+    switch (room.zone) {
+      case 'command':
+        // Command (bridge) should be at bow (left side)
+        score += (1 - normalizedX) * 40  // Higher score for lower X
+        break
+      case 'engineering':
+      case 'power':
+        // Engineering should be at stern (right side)
+        score += normalizedX * 40  // Higher score for higher X
+        break
+      case 'habitation':
+      case 'medical':
+      case 'social':
+        // Habitation in the middle
+        score += (1 - Math.abs(normalizedX - 0.5) * 2) * 25
+        break
+      case 'cargo':
+      case 'docking':
+        // Cargo/docking toward stern but not at the end
+        score += normalizedX * 0.6 * 30
+        break
+    }
+    
+    // For ships: prefer positions near the center Y axis (spine)
+    const distFromSpine = Math.abs(centerY - gridCenterY)
+    score -= distFromSpine * 2  // Penalty for being far from spine
+  }
+  
   switch (pattern) {
     case 'linear':
-      // Prefer horizontal alignment
-      score += 20 - Math.abs(centerY - gridCenterY)
+      // Prefer horizontal alignment along spine
+      score += 20 - Math.abs(centerY - gridCenterY) * 1.5
+      // Slight preference for elongated shape
+      score -= Math.abs(centerX - gridCenterX) * 0.1
       break
     case 'hub':
-      // Prefer positions around center
+      // Prefer positions around center for hub
       const distFromCenter = Math.sqrt((centerX - gridCenterX) ** 2 + (centerY - gridCenterY) ** 2)
       score += 30 - distFromCenter * 0.5
       break
@@ -494,7 +924,299 @@ function calculatePortToRoom(fromRect: Rect, toRect: Rect, connectorId: string):
 }
 
 // ============================================================================
-// CONNECTOR ROUTING
+// SPINE-AWARE CONNECTOR ROUTING
+// ============================================================================
+
+/**
+ * Route connectors using spine structure as the backbone
+ * 
+ * Strategy:
+ * 1. First, create corridors along spine segments
+ * 2. Then route each room connection via the nearest spine node
+ * 3. This creates a tree-like structure instead of spaghetti
+ */
+function routeConnectorsWithSpine(
+  connectors: GraphConnector[],
+  placedRooms: PlacedRoom[],
+  gridWidth: number,
+  gridHeight: number,
+  spine: SpineStructure,
+  request: GenerationRequest,
+  rng: SeededRNG
+): LayoutConnector[] {
+  const layoutConnectors: LayoutConnector[] = []
+  
+  // Calculate spine offset to center it in grid
+  const spineOffsetX = Math.floor((gridWidth - spine.bounds.width) / 2)
+  const spineOffsetY = Math.floor((gridHeight - spine.bounds.height) / 2)
+  
+  // Build spine corridor paths - these form the backbone
+  const spinePaths: Point[][] = []
+  
+  for (const segment of spine.segments) {
+    if (!segment.isSpine) continue  // Only main spine segments
+    
+    const fromNode = spine.nodes.find(n => n.id === segment.from)
+    const toNode = spine.nodes.find(n => n.id === segment.to)
+    if (!fromNode || !toNode) continue
+    
+    const fromWorld = {
+      x: (fromNode.position.x + spineOffsetX) * GRID_SIZE,
+      y: (fromNode.position.y + spineOffsetY) * GRID_SIZE
+    }
+    const toWorld = {
+      x: (toNode.position.x + spineOffsetX) * GRID_SIZE,
+      y: (toNode.position.y + spineOffsetY) * GRID_SIZE
+    }
+    
+    spinePaths.push([fromWorld, toWorld])
+  }
+  
+  // Create existing paths from spine for reuse in A*
+  const existingPaths: Point[][] = [...spinePaths]
+  
+  // Sort connectors: backbone first, then by distance
+  const sortedConnectors = [...connectors].sort((a, b) => {
+    if (a.isBackbone && !b.isBackbone) return -1
+    if (!a.isBackbone && b.isBackbone) return 1
+    
+    const aFrom = placedRooms.find(p => p.room.id === a.fromRoomId)
+    const aTo = placedRooms.find(p => p.room.id === a.toRoomId)
+    const bFrom = placedRooms.find(p => p.room.id === b.fromRoomId)
+    const bTo = placedRooms.find(p => p.room.id === b.toRoomId)
+    
+    if (aFrom && aTo && bFrom && bTo) {
+      const aDist = Math.abs(aFrom.rect.x - aTo.rect.x) + Math.abs(aFrom.rect.y - aTo.rect.y)
+      const bDist = Math.abs(bFrom.rect.x - bTo.rect.x) + Math.abs(bFrom.rect.y - bTo.rect.y)
+      return aDist - bDist
+    }
+    return 0
+  })
+  
+  for (const connector of sortedConnectors) {
+    const fromRoom = placedRooms.find(p => p.room.id === connector.fromRoomId)
+    const toRoom = placedRooms.find(p => p.room.id === connector.toRoomId)
+    
+    if (!fromRoom || !toRoom) continue
+    
+    // Find ports
+    const fromPort = fromRoom.room.ports.find(p => p.connectorId === connector.id)
+    const toPort = toRoom.room.ports.find(p => p.connectorId === connector.id)
+    
+    if (!fromPort || !toPort) continue
+    
+    // Route via spine if rooms are not adjacent
+    const path = routeViaSpine(
+      { x: fromPort.x, y: fromPort.y },
+      { x: toPort.x, y: toPort.y },
+      fromPort.wall,
+      toPort.wall,
+      spine,
+      spineOffsetX,
+      spineOffsetY,
+      placedRooms,
+      gridWidth,
+      gridHeight,
+      existingPaths
+    )
+    
+    layoutConnectors.push({
+      id: connector.id,
+      fromRoomId: connector.fromRoomId,
+      toRoomId: connector.toRoomId,
+      kind: connector.kind,
+      path: simplifyPath(path),
+      width: CORRIDOR_WIDTH * GRID_SIZE
+    })
+    
+    // Add this path to existing paths for reuse
+    existingPaths.push(path)
+  }
+  
+  return layoutConnectors
+}
+
+/**
+ * Route a corridor via the spine structure
+ */
+function routeViaSpine(
+  from: Point,
+  to: Point,
+  fromWall: 'top' | 'bottom' | 'left' | 'right',
+  toWall: 'top' | 'bottom' | 'left' | 'right',
+  spine: SpineStructure,
+  spineOffsetX: number,
+  spineOffsetY: number,
+  rooms: PlacedRoom[],
+  gridWidth: number,
+  gridHeight: number,
+  existingPaths: Point[][]
+): Point[] {
+  const extendDist = GRID_SIZE * 1.5
+  
+  // Extend out from walls
+  let p1 = { x: from.x, y: from.y }
+  let p2 = { x: to.x, y: to.y }
+  
+  switch (fromWall) {
+    case 'left': p1.x -= extendDist; break
+    case 'right': p1.x += extendDist; break
+    case 'top': p1.y -= extendDist; break
+    case 'bottom': p1.y += extendDist; break
+  }
+  
+  switch (toWall) {
+    case 'left': p2.x -= extendDist; break
+    case 'right': p2.x += extendDist; break
+    case 'top': p2.y -= extendDist; break
+    case 'bottom': p2.y += extendDist; break
+  }
+  
+  // Find nearest spine node to each point
+  const nearestSpineFrom = findNearestSpineNode(p1, spine, spineOffsetX, spineOffsetY)
+  const nearestSpineTo = findNearestSpineNode(p2, spine, spineOffsetX, spineOffsetY)
+  
+  // If both points are close to the same spine node, route directly
+  const distBetweenRooms = Math.abs(p1.x - p2.x) + Math.abs(p1.y - p2.y)
+  const distFromToSpine = nearestSpineFrom ? 
+    Math.abs(p1.x - nearestSpineFrom.x) + Math.abs(p1.y - nearestSpineFrom.y) : Infinity
+  const distToToSpine = nearestSpineTo ?
+    Math.abs(p2.x - nearestSpineTo.x) + Math.abs(p2.y - nearestSpineTo.y) : Infinity
+  
+  // If rooms are close together, route directly
+  if (distBetweenRooms < GRID_SIZE * 6) {
+    return calculateConnectorPathDirect(from, to, fromWall, toWall, rooms, gridWidth, gridHeight, existingPaths)
+  }
+  
+  // Route via spine:
+  // from -> p1 -> spine_from -> (along spine) -> spine_to -> p2 -> to
+  const path: Point[] = [from, p1]
+  
+  if (nearestSpineFrom && nearestSpineTo) {
+    // Route to spine
+    if (Math.abs(p1.x - nearestSpineFrom.x) > GRID_SIZE || 
+        Math.abs(p1.y - nearestSpineFrom.y) > GRID_SIZE) {
+      // L-shape to spine
+      path.push({ x: nearestSpineFrom.x, y: p1.y })
+      path.push(nearestSpineFrom)
+    }
+    
+    // Along spine (if different nodes)
+    if (Math.abs(nearestSpineFrom.x - nearestSpineTo.x) > GRID_SIZE ||
+        Math.abs(nearestSpineFrom.y - nearestSpineTo.y) > GRID_SIZE) {
+      // Find path along spine between nodes
+      const spinePath = findSpinePath(nearestSpineFrom, nearestSpineTo, spine, spineOffsetX, spineOffsetY)
+      path.push(...spinePath)
+    }
+    
+    // Route from spine to target
+    if (Math.abs(p2.x - nearestSpineTo.x) > GRID_SIZE ||
+        Math.abs(p2.y - nearestSpineTo.y) > GRID_SIZE) {
+      path.push(nearestSpineTo)
+      path.push({ x: nearestSpineTo.x, y: p2.y })
+    }
+  }
+  
+  path.push(p2, to)
+  
+  return simplifyPath(path)
+}
+
+/**
+ * Find the nearest spine node to a point
+ */
+function findNearestSpineNode(
+  point: Point,
+  spine: SpineStructure,
+  offsetX: number,
+  offsetY: number
+): Point | null {
+  let nearest: Point | null = null
+  let nearestDist = Infinity
+  
+  for (const node of spine.nodes) {
+    const nodeWorld = {
+      x: (node.position.x + offsetX) * GRID_SIZE,
+      y: (node.position.y + offsetY) * GRID_SIZE
+    }
+    
+    const dist = Math.abs(point.x - nodeWorld.x) + Math.abs(point.y - nodeWorld.y)
+    if (dist < nearestDist) {
+      nearestDist = dist
+      nearest = nodeWorld
+    }
+  }
+  
+  return nearest
+}
+
+/**
+ * Find a path along the spine between two points
+ */
+function findSpinePath(
+  from: Point,
+  to: Point,
+  spine: SpineStructure,
+  offsetX: number,
+  offsetY: number
+): Point[] {
+  // Simple: just return intermediate spine nodes between from and to
+  // For now, return a direct connection (spine segments are already straight)
+  
+  // For more complex spines (loops, branches), would need BFS/DFS
+  // For MVP, return direct L-path along spine
+  const path: Point[] = []
+  
+  // Prefer horizontal movement along spine
+  if (Math.abs(from.x - to.x) > GRID_SIZE) {
+    path.push({ x: to.x, y: from.y })
+  }
+  
+  return path
+}
+
+/**
+ * Calculate direct path between ports (for close rooms)
+ */
+function calculateConnectorPathDirect(
+  from: Point,
+  to: Point,
+  fromWall: 'top' | 'bottom' | 'left' | 'right',
+  toWall: 'top' | 'bottom' | 'left' | 'right',
+  rooms: PlacedRoom[],
+  gridWidth: number,
+  gridHeight: number,
+  existingPaths: Point[][] = []
+): Point[] {
+  const extendDist = GRID_SIZE * 1.5
+  
+  let p1 = { x: from.x, y: from.y }
+  let p2 = { x: to.x, y: to.y }
+  
+  switch (fromWall) {
+    case 'left': p1.x -= extendDist; break
+    case 'right': p1.x += extendDist; break
+    case 'top': p1.y -= extendDist; break
+    case 'bottom': p1.y += extendDist; break
+  }
+  
+  switch (toWall) {
+    case 'left': p2.x -= extendDist; break
+    case 'right': p2.x += extendDist; break
+    case 'top': p2.y -= extendDist; break
+    case 'bottom': p2.y += extendDist; break
+  }
+  
+  // Use A* pathfinding
+  const astarPath = findPathWithAStar(p1, p2, rooms, GRID_SIZE, existingPaths)
+  
+  const path: Point[] = [from, p1, ...astarPath.slice(1, -1), p2, to]
+  
+  return simplifyPath(path)
+}
+
+// ============================================================================
+// CONNECTOR ROUTING (Legacy - kept for reference)
 // ============================================================================
 
 function routeConnectors(
@@ -507,7 +1229,52 @@ function routeConnectors(
 ): LayoutConnector[] {
   const layoutConnectors: LayoutConnector[] = []
   
-  for (const connector of connectors) {
+  // For ships, create a main spine corridor along the horizontal center
+  const isShip = request.archetype === 'ship'
+  const spineY = Math.floor(gridHeight / 2) * GRID_SIZE
+  
+  // Build existing paths for reuse - start with spine for ships
+  const existingPaths: Point[][] = []
+  
+  if (isShip && placedRooms.length > 0) {
+    // Find leftmost and rightmost rooms
+    let minX = Infinity, maxX = -Infinity
+    for (const placed of placedRooms) {
+      const roomLeft = placed.room.x
+      const roomRight = placed.room.x + placed.room.width
+      if (roomLeft < minX) minX = roomLeft
+      if (roomRight > maxX) maxX = roomRight
+    }
+    
+    // Create main spine path
+    const spinePath: Point[] = [
+      { x: minX - GRID_SIZE * 2, y: spineY },
+      { x: maxX + GRID_SIZE * 2, y: spineY }
+    ]
+    existingPaths.push(spinePath)
+  }
+  
+  // Sort connectors: backbone first, then by distance (shorter first for better reuse)
+  const sortedConnectors = [...connectors].sort((a, b) => {
+    // Backbone corridors first
+    if (a.isBackbone && !b.isBackbone) return -1
+    if (!a.isBackbone && b.isBackbone) return 1
+    
+    // Then by estimated distance (prefer shorter corridors first)
+    const aFrom = placedRooms.find(p => p.room.id === a.fromRoomId)
+    const aTo = placedRooms.find(p => p.room.id === a.toRoomId)
+    const bFrom = placedRooms.find(p => p.room.id === b.fromRoomId)
+    const bTo = placedRooms.find(p => p.room.id === b.toRoomId)
+    
+    if (aFrom && aTo && bFrom && bTo) {
+      const aDist = Math.abs(aFrom.rect.x - aTo.rect.x) + Math.abs(aFrom.rect.y - aTo.rect.y)
+      const bDist = Math.abs(bFrom.rect.x - bTo.rect.x) + Math.abs(bFrom.rect.y - bTo.rect.y)
+      return aDist - bDist
+    }
+    return 0
+  })
+  
+  for (const connector of sortedConnectors) {
     const fromRoom = placedRooms.find(p => p.room.id === connector.fromRoomId)
     const toRoom = placedRooms.find(p => p.room.id === connector.toRoomId)
     
@@ -519,7 +1286,8 @@ function routeConnectors(
     
     if (!fromPort || !toPort) continue
     
-    // Calculate path
+    // Calculate path with reuse bonus from existing corridors
+    // Backbone corridors get less reuse bonus (they define the main routes)
     const path = calculateConnectorPath(
       { x: fromPort.x, y: fromPort.y },
       { x: toPort.x, y: toPort.y },
@@ -527,7 +1295,8 @@ function routeConnectors(
       toPort.wall,
       placedRooms,
       gridWidth,
-      gridHeight
+      gridHeight,
+      connector.isBackbone ? [] : existingPaths  // Backbone doesn't reuse, others do
     )
     
     layoutConnectors.push({
@@ -538,6 +1307,9 @@ function routeConnectors(
       path: simplifyPath(path),
       width: CORRIDOR_WIDTH * GRID_SIZE
     })
+    
+    // Add this path to existing paths for next connectors to reuse
+    existingPaths.push(path)
   }
   
   return layoutConnectors
@@ -550,7 +1322,8 @@ function calculateConnectorPath(
   toWall: 'top' | 'bottom' | 'left' | 'right',
   rooms: PlacedRoom[],
   gridWidth: number,
-  gridHeight: number
+  gridHeight: number,
+  existingPaths: Point[][] = []
 ): Point[] {
   // Extend out from walls first
   const extendDist = GRID_SIZE * 1.5
@@ -575,7 +1348,7 @@ function calculateConnectorPath(
   }
 
   // Use A* pathfinding between p1 and p2 that avoids rooms
-  const astarPath = findPathWithAStar(p1, p2, rooms, GRID_SIZE)
+  const astarPath = findPathWithAStar(p1, p2, rooms, GRID_SIZE, existingPaths)
   
   // Build final path: from -> p1 -> astarPath -> p2 -> to
   const path: Point[] = [{ x: from.x, y: from.y }, { x: p1.x, y: p1.y }, ...astarPath.slice(1, -1), { x: p2.x, y: p2.y }, { x: to.x, y: to.y }]
@@ -588,9 +1361,29 @@ function findPathWithAStar(
   start: Point,
   end: Point,
   rooms: PlacedRoom[],
-  cellSize: number
+  cellSize: number,
+  existingPaths: Point[][] = []
 ): Point[] {
   const padding = cellSize * CORRIDOR_CLEARANCE
+  
+  // Build a set of existing corridor points for reuse bonus
+  const reusePointSet = new Set<string>()
+  const proximityPointSet = new Set<string>() // Points adjacent to corridors
+  const REUSE_TOLERANCE = cellSize * 0.75 // Points within this distance count as reusable
+  
+  for (const path of existingPaths) {
+    for (const p of path) {
+      // Snap to grid for lookup
+      const gx = Math.round(p.x / cellSize)
+      const gy = Math.round(p.y / cellSize)
+      reusePointSet.add(`${gx},${gy}`)
+      
+      // Add adjacent cells for proximity bonus
+      for (const [dx, dy] of [[0,1],[0,-1],[1,0],[-1,0]]) {
+        proximityPointSet.add(`${gx+dx},${gy+dy}`)
+      }
+    }
+  }
   
   // Calculate grid bounds
   const allPoints = [start, end, ...rooms.flatMap(r => [
@@ -709,9 +1502,22 @@ function findPathWithAStar(
       if (closedSet.has(key)) continue
       if (isBlocked(nx, ny)) continue
       
-      // Add turn penalty for direction changes
-      const turnPenalty = (current.direction !== 0 && current.direction !== d.dir) ? 5 : 0
-      const g = current.g + 1 + turnPenalty
+      // Add turn penalty for direction changes (higher to discourage zigzags)
+      const turnPenalty = (current.direction !== 0 && current.direction !== d.dir) ? 8 : 0
+      
+      // Reuse bonus: if this point is on an existing corridor (especially spine)
+      let reuseBonus = 0
+      if (reusePointSet.has(key)) {
+        reuseBonus = -8  // Very strong bonus for exact reuse (spine or existing corridor)
+      } else if (proximityPointSet.has(key)) {
+        reuseBonus = -2  // Bonus for being adjacent to corridor
+      }
+      
+      // For ships: slight preference for horizontal movement (along spine)
+      // This makes corridors prefer to run along the ship's length
+      const directionBonus = (d.dir === 1) ? -0.5 : 0  // Horizontal is slightly cheaper
+      
+      const g = current.g + 1 + turnPenalty + reuseBonus + directionBonus
       const h = heuristic({ x: nx, y: ny }, gridEnd)
       const f = g + h
       

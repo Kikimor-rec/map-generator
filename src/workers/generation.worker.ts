@@ -7,7 +7,7 @@ import { runQualityPipeline, QualityPipelineOptions, RefinementUpdate } from '..
 
 // Define the shape of messages
 export type WorkerMessage =
-    | { type: 'START_GENERATION', payload: GeneratorOptions & { useQuality: boolean, qualityMode?: string } }
+    | { type: 'START_GENERATION', payload: GeneratorOptions & { useQuality: boolean, qualityMode?: string, engine?: 'grid' | 'legacy' } }
     | { type: 'CANCEL' };
 
 export type WorkerResponse =
@@ -86,18 +86,35 @@ ctx.onmessage = async (event: MessageEvent<WorkerMessage>) => {
                     ctx.postMessage({ type: 'COMPLETE', payload: result });
                 }
             } else {
-                // Run Standard Generator
-                // This is synchronous. To allow "Progress" we might need to modify generateMap to yield?
-                // Or just fake it for now since it's fast.
-                ctx.postMessage({ type: 'PROGRESS', payload: { progress: 50, message: 'Generating Layout...', stage: 'layout' } });
-
-                // Slight delay to allow UI to update if we want (optional)
-                // await new Promise(r => setTimeout(r, 10));
-
+                // Run Standard Generator with progress stages
+                const stages = [
+                    { progress: 10, message: '🎲 Generating room program...', stage: 'program' },
+                    { progress: 25, message: '🔗 Building topology graph...', stage: 'topology' },
+                    { progress: 45, message: '📐 Placing rooms on grid...', stage: 'placement' },
+                    { progress: 65, message: '🛤️ Routing corridors...', stage: 'routing' },
+                    { progress: 85, message: '✨ Applying finishing touches...', stage: 'finishing' },
+                ];
+                
+                // Send initial stage
+                ctx.postMessage({ type: 'PROGRESS', payload: stages[0] });
+                await new Promise(r => setTimeout(r, 50));
+                
+                // Simulate progress through stages (actual work happens in generateMap)
+                ctx.postMessage({ type: 'PROGRESS', payload: stages[1] });
+                await new Promise(r => setTimeout(r, 30));
+                
+                ctx.postMessage({ type: 'PROGRESS', payload: stages[2] });
+                await new Promise(r => setTimeout(r, 30));
+                
+                ctx.postMessage({ type: 'PROGRESS', payload: stages[3] });
+                
                 const result = generateMap(payload);
+                
+                ctx.postMessage({ type: 'PROGRESS', payload: stages[4] });
+                await new Promise(r => setTimeout(r, 20));
 
                 if (!signal.aborted) {
-                    ctx.postMessage({ type: 'COMPLETE', payload: result.map }); // Return just the map object to match quality output
+                    ctx.postMessage({ type: 'COMPLETE', payload: result.map });
                 }
             }
 

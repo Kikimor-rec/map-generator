@@ -339,8 +339,8 @@ export interface CoalesceSettings {
  */
 export const DEFAULT_COALESCE_SETTINGS: CoalesceSettings = {
   enabled: true,
-  tolerancePx: 4,
-  minSharedLength: 20,
+  tolerancePx: 15,
+  minSharedLength: 15,
   typeMergePolicy: 'shareIfSameType',
   layerMergePolicy: 'mergeWithinLayer',
   preferReuseWeight: 0.3, // 30% cost reduction for reusing existing segments
@@ -411,20 +411,20 @@ export interface RoutingCostConfig {
  */
 export const DEFAULT_ROUTING_COSTS: RoutingCostConfig = {
   lengthCost: 1.0,
-  bendPenalty: 5.0,
-  bend45Penalty: 3.0,
-  obstaclePenalty: 10000, // Effectively forbidden
-  nearMissPenalty: 2.0,
-  nearMissDistance: 20,
-  crossingPenalty: 10.0,
+  bendPenalty: 50.0,        // Increased from 5.0 to strongly discourage turns
+  bend45Penalty: 30.0,      // Increased from 3.0
+  obstaclePenalty: 10000,   // Effectively forbidden
+  nearMissPenalty: 5.0,     // Increased from 2.0 for better wall avoidance
+  nearMissDistance: 30,     // Increased from 20 for wider buffer
+  crossingPenalty: 20.0,    // Increased from 10.0
   crossingPolicy: 'bridgeJump',
   preferReuseEnabled: true,
-  reuseBonus: -3.0,
-  reuseBonusStrength: 0.5,
-  reuseCapacity: 3,
-  junctionDegreePenalty: 2.0,
+  reuseBonus: -15.0,        // Increased from -3.0 to encourage corridor sharing
+  reuseBonusStrength: 0.7,  // Increased from 0.5
+  reuseCapacity: 4,         // Increased from 3
+  junctionDegreePenalty: 3.0,
   minJunctionSpacing: 40,
-  junctionProximityPenalty: 5.0,
+  junctionProximityPenalty: 8.0,
 }
 
 // ============================================================================

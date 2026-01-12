@@ -7,37 +7,35 @@
 // Input Parameters (02_input_parameters.md)
 // ============================================================================
 
-export type Archetype =
-  | 'ship'
-  | 'station'
+export type Archetype = 
+  | 'ship' 
+  | 'station' 
   | 'outpost'
-  | 'capital'
-  | 'bunker'
 
-export type ShipSubtype =
-  | 'courier'
-  | 'cargo'
-  | 'research'
-  | 'military'
-  | 'salvage'
+export type ShipSubtype = 
+  | 'courier' 
+  | 'cargo' 
+  | 'research' 
+  | 'military' 
+  | 'salvage' 
   | 'smuggler'
   | 'medical'
   | 'prison'
   | 'colony'
 
-export type StationSubtype =
-  | 'port'
-  | 'research'
-  | 'military'
-  | 'refinery'
+export type StationSubtype = 
+  | 'port' 
+  | 'research' 
+  | 'military' 
+  | 'refinery' 
   | 'habitat'
   | 'listeningPost'
 
-export type OutpostSubtype =
-  | 'science'
-  | 'mining'
-  | 'military'
-  | 'frontier'
+export type OutpostSubtype = 
+  | 'science' 
+  | 'mining' 
+  | 'military' 
+  | 'frontier' 
   | 'ruins'
   | 'blacksite'
 
@@ -63,38 +61,38 @@ export interface GenerationRequest {
   subtype: Subtype
   styleProfile: StyleProfile
   sizeTier: SizeTier
-
+  
   // Geometry & readability
   gridUnit?: number
   boundsHint?: { w: number; h: number }
   symmetry?: number // 0..1
   modularity?: number // 0..1
   readability?: number // 0..1
-
+  
   // Gameplay
   loopiness?: number // 0..1
   secretness?: number // 0..1
   danger?: number // 0..1
   setpieceBias?: number // 0..1
-
+  
   // Decks
   decks?: number | 'auto'
   maxRoomsPerDeck?: number
   verticality?: number // 0..1
-
+  
   // Content control
   roomCountTarget?: number
   includeList?: string[]
   excludeList?: string[]
   mustHaveSetpieces?: string[]
   accessPolicy?: 'soft' | 'strict'
-
+  
   // Hard constraints
   maxCorridorLength?: number
   maxDeadEndRatio?: number
   minAltPathsBetweenCritical?: number
   maxRoomsTotal?: number
-
+  
   // Output
   outputVersion?: string
   debug?: boolean
@@ -145,10 +143,10 @@ export interface ConnectorHint {
 // Topology Graph (04_topology_graph.md)
 // ============================================================================
 
-export type ConnectorKind =
-  | 'corridor'
+export type ConnectorKind = 
+  | 'corridor' 
   | 'door'
-  | 'airlock'
+  | 'airlock' 
   | 'bulkhead'
   | 'serviceHatch'
 
@@ -200,6 +198,7 @@ export interface Port {
   y: number
   wall: 'top' | 'bottom' | 'left' | 'right'
   connectorId: string
+  doorType?: string
 }
 
 export interface LayoutRoom {
@@ -217,6 +216,8 @@ export interface LayoutRoom {
   zone: string
   ports: Port[]
   isExterior: boolean
+  tags?: string[]
+  metadata?: RoomMetadata
 }
 
 export interface LayoutConnector {
@@ -226,6 +227,7 @@ export interface LayoutConnector {
   kind: ConnectorKind
   path: Point[]
   width: number
+  widthClass?: 'narrow' | 'standard' | 'wide'
 }
 
 export interface Junction {
@@ -234,14 +236,6 @@ export interface Junction {
   y: number
   connectorIds: string[]
   type: 'tee' | 'cross' | 'hub'
-}
-
-export interface Socket {
-  id: string;
-  x: number;
-  y: number;
-  direction: 'top' | 'bottom' | 'left' | 'right';
-  width?: number; // Connection width
 }
 
 export interface DeckLayout {
@@ -330,6 +324,7 @@ export interface RoomTypeConfig {
   accessLevel: number
   tags: string[]
   isExterior?: boolean
+  featureRules?: FeatureRules
   styleHints?: {
     hasViewport?: boolean
     consoleCount?: { min: number; max: number }
@@ -356,4 +351,43 @@ export interface SeededRNG {
   pick<T>(array: T[]): T
   shuffle<T>(array: T[]): T[]
   chance(probability: number): boolean
+}
+
+// ============================================================================
+// Features & Metadata (used in features.ts, objectPlacer.ts)
+// ============================================================================
+
+export interface RoomMetadata {
+  hazards?: string[]
+  loot?: string[]
+  passives?: string[]
+  description?: string
+}
+
+export interface WeightedItem {
+  id: string
+  weight: number
+}
+
+export interface FeatureRules {
+  hazardChance?: number
+  lootChance?: number
+  passiveChance?: number
+  possibleHazards?: WeightedItem[]
+  possibleLoot?: WeightedItem[]
+  possiblePassives?: WeightedItem[]
+}
+
+// ============================================================================
+// Skeleton Generator Types
+// ============================================================================
+
+export interface Socket {
+  id: string
+  x: number
+  y: number
+  wall?: 'top' | 'bottom' | 'left' | 'right'
+  direction?: 'top' | 'bottom' | 'left' | 'right'
+  width?: number
+  roomId?: string
 }
