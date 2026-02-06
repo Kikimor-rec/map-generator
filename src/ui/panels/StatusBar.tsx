@@ -1,8 +1,23 @@
+import { useState, useEffect, useCallback } from 'react'
 import { useEditor, actions } from '@store/EditorContext'
 
 export function StatusBar() {
   const { state, dispatch, rooms, corridors } = useEditor()
   const { viewport, activeTool, gridSize, isDrawing, drawStartPoint, drawCurrentPoint, selection } = state
+
+  // Track cursor position in grid coordinates
+  const [cursorGrid, setCursorGrid] = useState<{ x: number; y: number } | null>(null)
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      // Convert screen coordinates to grid coordinates using viewport
+      const gridX = Math.floor((e.clientX - viewport.x) / (gridSize * viewport.zoom))
+      const gridY = Math.floor((e.clientY - viewport.y) / (gridSize * viewport.zoom))
+      setCursorGrid({ x: gridX, y: gridY })
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    return () => window.removeEventListener('mousemove', handleMouseMove)
+  }, [viewport.x, viewport.y, viewport.zoom, gridSize])
 
   const getToolHint = () => {
     switch (activeTool) {
@@ -101,25 +116,41 @@ export function StatusBar() {
         {drawingInfo}
       </div>
 
-      {/* Right - Coordinates and zoom */}
+      {/* Right - Coordinates, counts and zoom */}
       <div className="flex items-center gap-4 text-space-500">
-        <span>Grid: {gridSize}px</span>
+        {cursorGrid && (
+          <span className="font-mono text-space-400" title="Cursor grid position">
+            X:{cursorGrid.x} Y:{cursorGrid.y}
+          </span>
+        )}
+        <span className="text-space-600">|</span>
+        <span title="Room and corridor count">
+          {rooms.length}R / {corridors.length}C
+        </span>
+        {selection.ids.length > 0 && (
+          <>
+            <span className="text-space-600">|</span>
+            <span className="text-cyber-blue">
+              {selection.ids.length} selected
+            </span>
+          </>
+        )}
+        <span className="text-space-600">|</span>
         <button
           onClick={handleZoom100}
           className="px-2 py-0.5 hover:bg-space-700 rounded text-space-400 hover:text-white transition-colors"
           title="Reset zoom to 100%"
         >
-          Zoom: {Math.round(viewport.zoom * 100)}%
+          {Math.round(viewport.zoom * 100)}%
         </button>
         <button
           onClick={handleCenterOnSelection}
           disabled={selection.ids.length === 0}
           className="px-2 py-0.5 hover:bg-space-700 rounded text-space-400 hover:text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title="Center on selection (requires selection)"
+          title="Center on selection"
         >
-          ⌖ Center
+          ⌖
         </button>
-        <span>Pan: ({Math.round(viewport.x)}, {Math.round(viewport.y)})</span>
       </div>
     </div>
   )

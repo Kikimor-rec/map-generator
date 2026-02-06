@@ -1,5 +1,7 @@
 # Routing Intelligence Specification (v2)
 
+> **Note:** Corridor routing is now implemented in `src/generators/gridGenerator/corridorRouter.ts` (graph-first approach with MST + A*). This document may contain outdated design ideas from the spine-first era.
+
 Updated to reflect the current implementation (sparse-graph router with grid fallback, mandatory coalesce, shared cost function). This document replaces the corrupted legacy text.
 
 ## Goals

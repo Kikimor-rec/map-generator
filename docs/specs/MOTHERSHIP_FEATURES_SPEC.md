@@ -1,5 +1,12 @@
 # Mothership-Inspired Features & UX Patterns
 
+> **Implementation Status (2026-02-06):**
+> - Types and interfaces: ~90% defined in code
+> - UI implementation: ~10% (types exist, most UI components not yet built)
+> - Visibility system: Types defined, logic not implemented
+> - Marker system: Types defined, placement UI not implemented
+> - Secret passages: Types defined, discovery mechanics not implemented
+
 ## Источник вдохновения
 
 Mothership Map Viewer / Map Creator (Foundry module + web tool) — референс для TTRPG-ориентированных паттернов редактирования и visibility модели.

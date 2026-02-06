@@ -1,5 +1,7 @@
 # Edge Router — Алгоритмы и реализация (grid+A* базовый, libavoid/ELK опционально)
 
+> **Note:** Corridor routing is now implemented in `src/generators/gridGenerator/corridorRouter.ts` (graph-first approach with MST + A*). This document may contain outdated design ideas from the spine-first era.
+
 Дата: 2025-12-17
 
 Этот документ фиксирует “как именно” строить ортогональные маршруты.

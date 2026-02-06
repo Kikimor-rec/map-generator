@@ -67,6 +67,7 @@ export function routeCorridors(
 
   for (const conn of connections) {
     const path = routeConnection(canvas, conn, allCorridorTiles)
+    const corridorId = `${conn.fromRoom.roomId}_${conn.toRoom.roomId}`
 
     // Carve the corridor path
     for (const p of path) {
@@ -77,13 +78,18 @@ export function routeCorridors(
       if (tile.type === TileType.HULL) {
         canvas.tiles[p.y][p.x] = {
           type: TileType.CORRIDOR,
-          corridorId: `${conn.fromRoom.roomId}_${conn.toRoom.roomId}`,
+          corridorId,
         }
         allCorridorTiles.add(key)
       } else if (tile.type === TileType.CORRIDOR) {
         // Corridor crosses existing corridor — this becomes a junction!
         allCorridorTiles.add(key)
       }
+    }
+
+    // Widen backbone corridors (between primary rooms) to 2 tiles
+    if (conn.isBackbone && path.length > 2) {
+      widenCorridor(canvas, path, corridorId, allCorridorTiles)
     }
 
     // Update door positions for both rooms
@@ -645,6 +651,49 @@ function connectRoomToNearestCorridor(
   }
 
   updateDoorPositions(canvas, room)
+}
+
+// ============================================================================
+// CORRIDOR WIDENING
+// ============================================================================
+
+/**
+ * Widen a corridor path to 2 tiles wide.
+ * For each corridor tile, add a parallel tile perpendicular to the path direction.
+ */
+function widenCorridor(
+  canvas: GridCanvas,
+  path: Point[],
+  corridorId: string,
+  allCorridorTiles: Set<string>
+): void {
+  for (let i = 0; i < path.length; i++) {
+    const p = path[i]
+    // Determine direction of corridor at this point
+    const prev = path[i - 1] || p
+    const next = path[i + 1] || p
+    const dx = next.x - prev.x
+    const dy = next.y - prev.y
+
+    // Perpendicular offset: if moving horizontally, widen vertically and vice versa
+    let ox = 0, oy = 0
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      oy = 1 // horizontal corridor → widen down
+    } else {
+      ox = 1 // vertical corridor → widen right
+    }
+
+    const nx = p.x + ox
+    const ny = p.y + oy
+    const tile = getTile(canvas, nx, ny)
+    if (tile && tile.type === TileType.HULL) {
+      canvas.tiles[ny][nx] = {
+        type: TileType.CORRIDOR,
+        corridorId,
+      }
+      allCorridorTiles.add(`${nx},${ny}`)
+    }
+  }
 }
 
 // ============================================================================

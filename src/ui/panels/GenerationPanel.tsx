@@ -118,6 +118,30 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   const [showSlowIndicator, setShowSlowIndicator] = useState(false)
   const [plainStatus, setPlainStatus] = useState<string | null>(null)
 
+  // 3-tier parameter disclosure
+  const [showLevel2, setShowLevel2] = useState(false)
+
+  // Seed history (persist in localStorage)
+  const [seedHistory, setSeedHistory] = useState<Array<{
+    seed: string
+    archetype: Archetype
+    roomCount: number
+    timestamp: number
+  }>>(() => {
+    try {
+      const saved = localStorage.getItem('scifi-map-seed-history')
+      return saved ? JSON.parse(saved) : []
+    } catch { return [] }
+  })
+
+  // Preview mode: generate but don't apply yet
+  const [previewData, setPreviewData] = useState<{
+    project: any
+    seed: string
+    roomCount: number
+    corridorCount: number
+  } | null>(null)
+
   // Available subtypes
   const availableSubtypes = ARCHETYPE_CONFIGS[archetype].subtypes
 
@@ -133,6 +157,29 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     const newSeed = Math.random().toString(36).substring(2, 10).toUpperCase()
     setSeed(newSeed)
     return newSeed
+  }, [])
+
+  // Save seed to history
+  const addToSeedHistory = useCallback((seedVal: string, roomCount: number) => {
+    setSeedHistory(prev => {
+      const entry = { seed: seedVal, archetype, roomCount, timestamp: Date.now() }
+      const updated = [entry, ...prev.filter(h => h.seed !== seedVal)].slice(0, 10)
+      try { localStorage.setItem('scifi-map-seed-history', JSON.stringify(updated)) } catch {}
+      return updated
+    })
+  }, [archetype])
+
+  // Apply preview to editor
+  const handleApplyPreview = useCallback(() => {
+    if (!previewData) return
+    dispatch(actions.loadProject(previewData.project))
+    addToSeedHistory(previewData.seed, previewData.roomCount)
+    setPreviewData(null)
+    onClose()
+  }, [previewData, dispatch, onClose, addToSeedHistory])
+
+  const handleDiscardPreview = useCallback(() => {
+    setPreviewData(null)
   }, [])
 
   // Long-running indicator
@@ -297,19 +344,25 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               metadata: metaData,
             }
 
-            dispatch(actions.loadProject(newProject))
+            // Preview mode: show result before applying
+            setPreviewData({
+              project: newProject,
+              seed: useSeed,
+              roomCount: editorData.rooms.length,
+              corridorCount: editorData.corridors.length,
+            })
+            addToSeedHistory(useSeed, editorData.rooms.length)
 
             setGenState({
               isGenerating: false,
               lastSeed: useSeed,
-              lastTiming: 0, // Worker doesn't return timing easily yet
+              lastTiming: 0,
               error: null,
               progress: 100,
               candidatesEvaluated: metaData.candidatesEvaluated || 0,
               qualityPhase: null,
             })
             setPlainStatus(null)
-            onClose();
 
           } catch (err: any) {
             setGenState(s => ({ ...s, isGenerating: false, error: err.message }))
@@ -481,7 +534,9 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
 
         <div className="overflow-y-auto flex-1">
           <div className="p-4 space-y-3">
-            {/* Seed Input */}
+            {/* ============ TIER 1: Essential Parameters ============ */}
+
+            {/* Seed Input + History */}
             <div className="space-y-1">
               <label className="label">Seed</label>
               <div className="flex gap-2">
@@ -500,6 +555,26 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   Random
                 </button>
               </div>
+              {/* Seed history */}
+              {seedHistory.length > 0 && (
+                <div className="flex gap-1 flex-wrap mt-1">
+                  <span className="text-xs text-space-500">History:</span>
+                  {seedHistory.slice(0, 5).map(h => (
+                    <button
+                      key={h.seed}
+                      onClick={() => setSeed(h.seed)}
+                      className={`text-xs px-2 py-0.5 rounded border transition-colors ${
+                        seed === h.seed
+                          ? 'bg-space-700 border-cyber-blue text-cyber-blue'
+                          : 'bg-space-800 border-space-700 text-space-400 hover:border-space-500'
+                      }`}
+                      title={`${h.archetype} / ${h.roomCount} rooms`}
+                    >
+                      {h.seed}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Compact two-column layout */}
@@ -540,21 +615,22 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   </select>
                 </div>
 
-                {/* Style Profile */}
-                <div className="space-y-1">
-                  <label className="label">Style</label>
-                  <select
-                    value={styleProfile}
-                    onChange={e => setStyleProfile(e.target.value as StyleProfile)}
-                    className="input w-full"
-                  >
-                    {STYLE_PROFILES.map(sp => (
-                      <option key={sp.value} value={sp.value}>
-                        {sp.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {showLevel2 && (
+                  <div className="space-y-1">
+                    <label className="label">Style</label>
+                    <select
+                      value={styleProfile}
+                      onChange={e => setStyleProfile(e.target.value as StyleProfile)}
+                      className="input w-full"
+                    >
+                      {STYLE_PROFILES.map(sp => (
+                        <option key={sp.value} value={sp.value}>
+                          {sp.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -581,77 +657,82 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   </p>
                 </div>
 
-                {/* Quality Mode */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="label">Quality mode</label>
-                    <label className="flex items-center gap-1 text-xs text-space-400">
-                      <input
-                        type="checkbox"
-                        checked={useQualityPipeline}
-                        onChange={e => setUseQualityPipeline(e.target.checked)}
-                        className="w-3 h-3"
-                      />
-                      Quality Pipeline
-                    </label>
-                  </div>
-                  {useQualityPipeline && (
-                    <>
-                      <div className="grid grid-cols-3 gap-1">
-                        {QUALITY_MODES.map(qm => (
-                          <button
-                            key={qm.value}
-                            onClick={() => setQualityMode(qm.value)}
-                            className={`px-2 py-2 rounded text-sm font-medium border transition-all ${qualityMode === qm.value
-                              ? 'bg-space-700 border-cyber-blue text-cyber-blue'
-                              : 'bg-space-800 border-space-600 text-space-300 hover:border-space-500'
-                              }`}
-                            title={qm.description}
-                          >
-                            {qm.label}
-                          </button>
-                        ))}
+                {/* ============ TIER 2: Secondary Parameters ============ */}
+                {showLevel2 && (
+                  <>
+                    {/* Quality Mode */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="label">Quality mode</label>
+                        <label className="flex items-center gap-1 text-xs text-space-400">
+                          <input
+                            type="checkbox"
+                            checked={useQualityPipeline}
+                            onChange={e => setUseQualityPipeline(e.target.checked)}
+                            className="w-3 h-3"
+                          />
+                          Quality Pipeline
+                        </label>
                       </div>
-                      <p className="text-xs text-space-400">
-                        {QUALITY_MODES.find(q => q.value === qualityMode)?.description} / up to{' '}
-                        {QUALITY_MODE_CONFIGS[qualityMode].maxCandidates} candidates
-                      </p>
-                    </>
-                  )}
-                </div>
-
-                {/* Gallery Mode Toggle */}
-                <div className="space-y-1">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={galleryMode}
-                      onChange={e => setGalleryMode(e.target.checked)}
-                      className="w-4 h-4 accent-cyber-blue"
-                    />
-                    <span className="text-sm text-space-200">Gallery mode</span>
-                  </label>
-                  {galleryMode && (
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="text-xs text-space-400">Variants:</span>
-                      {[2, 4, 6, 8].map(n => (
-                        <button
-                          key={n}
-                          onClick={() => setVariantCount(n)}
-                          className={`px-2 py-1 text-xs rounded ${variantCount === n
-                            ? 'bg-cyber-blue text-white'
-                            : 'bg-space-700 text-space-300 hover:bg-space-600'
-                          }`}
-                        >
-                          {n}
-                        </button>
-                      ))}
+                      {useQualityPipeline && (
+                        <>
+                          <div className="grid grid-cols-3 gap-1">
+                            {QUALITY_MODES.map(qm => (
+                              <button
+                                key={qm.value}
+                                onClick={() => setQualityMode(qm.value)}
+                                className={`px-2 py-2 rounded text-sm font-medium border transition-all ${qualityMode === qm.value
+                                  ? 'bg-space-700 border-cyber-blue text-cyber-blue'
+                                  : 'bg-space-800 border-space-600 text-space-300 hover:border-space-500'
+                                  }`}
+                                title={qm.description}
+                              >
+                                {qm.label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-xs text-space-400">
+                            {QUALITY_MODES.find(q => q.value === qualityMode)?.description} / up to{' '}
+                            {QUALITY_MODE_CONFIGS[qualityMode].maxCandidates} candidates
+                          </p>
+                        </>
+                      )}
                     </div>
-                  )}
-                  <p className="text-xs text-space-500">
-                    {galleryMode ? `Generate ${variantCount} variants to compare` : 'Generate single map'}
-                  </p>
-                </div>
+
+                    {/* Gallery Mode Toggle */}
+                    <div className="space-y-1">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={galleryMode}
+                          onChange={e => setGalleryMode(e.target.checked)}
+                          className="w-4 h-4 accent-cyber-blue"
+                        />
+                        <span className="text-sm text-space-200">Gallery mode</span>
+                      </label>
+                      {galleryMode && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-xs text-space-400">Variants:</span>
+                          {[2, 4, 6, 8].map(n => (
+                            <button
+                              key={n}
+                              onClick={() => setVariantCount(n)}
+                              className={`px-2 py-1 text-xs rounded ${variantCount === n
+                                ? 'bg-cyber-blue text-white'
+                                : 'bg-space-700 text-space-300 hover:bg-space-600'
+                              }`}
+                            >
+                              {n}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <p className="text-xs text-space-500">
+                        {galleryMode ? `Generate ${variantCount} variants to compare` : 'Generate single map'}
+                      </p>
+                    </div>
+                  </>
+                )}
 
                 {/* Loopiness Slider */}
                 <div className="space-y-1">
@@ -675,39 +756,52 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 </div>
 
                 {/* Danger Slider */}
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <label className="label">Danger</label>
-                    <span className="text-xs text-space-400">{Math.round(danger * 100)}%</span>
+                {showLevel2 && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between">
+                      <label className="label">Danger</label>
+                      <span className="text-xs text-space-400">{Math.round(danger * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.1"
+                      value={danger}
+                      onChange={e => setDanger(parseFloat(e.target.value))}
+                      className="w-full"
+                    />
+                    <div className="flex justify-between text-xs text-space-500">
+                      <span>Safe</span>
+                      <span>Dangerous</span>
+                    </div>
                   </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                    value={danger}
-                    onChange={e => setDanger(parseFloat(e.target.value))}
-                    className="w-full"
-                  />
-                  <div className="flex justify-between text-xs text-space-500">
-                    <span>Safe</span>
-                    <span>Dangerous</span>
-                  </div>
-                </div>
+                )}
               </div>
             </div>
 
-            {/* Advanced Options Toggle */}
+            {/* Tier 2 toggle */}
             <button
-              onClick={() => setShowAdvanced(!showAdvanced)}
+              onClick={() => setShowLevel2(!showLevel2)}
               className="w-full py-2 px-3 text-sm text-left text-space-400 hover:text-space-200 border border-space-700 rounded hover:border-space-600 transition-colors flex justify-between items-center"
             >
-              <span>Advanced corridor settings</span>
-              <span>{showAdvanced ? 'Hide' : 'Show'}</span>
+              <span>{showLevel2 ? 'Less options' : 'More options (style, danger, gallery...)'}</span>
+              <span className="text-xs">{showLevel2 ? '▲' : '▼'}</span>
             </button>
 
-            {/* Advanced Routing Options */}
-            {showAdvanced && (
+            {/* Tier 3: Advanced corridor settings */}
+            {showLevel2 && (
+              <button
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="w-full py-2 px-3 text-sm text-left text-space-400 hover:text-space-200 border border-space-700 rounded hover:border-space-600 transition-colors flex justify-between items-center"
+              >
+                <span>Advanced corridor settings</span>
+                <span className="text-xs">{showAdvanced ? '▲' : '▼'}</span>
+              </button>
+            )}
+
+            {/* Advanced Routing Options (Tier 3) */}
+            {showLevel2 && showAdvanced && (
               <div className="space-y-3 p-3 bg-space-800/50 rounded border border-space-700">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -843,11 +937,12 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 </div>
                 {/* Stage indicators */}
                 <div className="flex justify-between text-xs text-space-500">
-                  <span className={genState.progress >= 10 ? 'text-cyber-blue' : ''}>Rooms</span>
-                  <span className={genState.progress >= 25 ? 'text-cyber-blue' : ''}>Graph</span>
-                  <span className={genState.progress >= 45 ? 'text-cyber-blue' : ''}>Layout</span>
-                  <span className={genState.progress >= 65 ? 'text-cyber-blue' : ''}>Corridors</span>
-                  <span className={genState.progress >= 85 ? 'text-cyber-blue' : ''}>Done</span>
+                  <span className={genState.progress >= 15 ? 'text-cyber-blue' : ''}>Hull</span>
+                  <span className={genState.progress >= 30 ? 'text-cyber-blue' : ''}>Zones</span>
+                  <span className={genState.progress >= 45 ? 'text-cyber-blue' : ''}>Rooms</span>
+                  <span className={genState.progress >= 60 ? 'text-cyber-blue' : ''}>Corridors</span>
+                  <span className={genState.progress >= 85 ? 'text-cyber-blue' : ''}>Doors</span>
+                  <span className={genState.progress >= 95 ? 'text-cyber-blue' : ''}>Done</span>
                 </div>
               </div>
             )}
@@ -944,6 +1039,39 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 )}
               </div>
             )}
+            {/* Preview Result */}
+            {previewData && !genState.isGenerating && (
+              <div className="p-3 bg-space-800 border border-cyber-blue/40 rounded space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-cyber-blue">Preview Ready</span>
+                  <span className="text-xs font-mono text-space-400">{previewData.seed}</span>
+                </div>
+                <div className="text-xs text-space-300">
+                  {previewData.roomCount} rooms, {previewData.corridorCount} corridors
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleApplyPreview}
+                    className="flex-1 btn btn-cyber"
+                  >
+                    Apply
+                  </button>
+                  <button
+                    onClick={handleDiscardPreview}
+                    className="btn btn-secondary"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    onClick={handleGenerate}
+                    className="btn btn-secondary"
+                    title="Generate with new random seed"
+                  >
+                    Reroll
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -964,7 +1092,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
             <button
               onClick={handleGenerate}
               className="btn btn-cyber"
-              disabled={genState.isGenerating}
+              disabled={genState.isGenerating || !!previewData}
             >
               {genState.isGenerating ? 'Generating...' : 'Generate'}
             </button>
