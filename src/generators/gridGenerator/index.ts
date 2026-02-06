@@ -1,13 +1,17 @@
 /**
  * Grid-First Map Generator
  * Main entry point for tile-based procedural map generation
+ *
+ * Generation pipeline (v2 — graph-first approach):
+ * 1. Create canvas → 2. Carve hull → 3. Partition zones
+ * 4. Place rooms (graph-first, adjacency-aware) → 5. Route corridors (MST + loops)
+ * 6. Place doors → 7. Convert to MapJSON
  */
 
 import type {
   GenerationRequest,
   RoomProgram,
   MapJSON,
-  DeckLayout,
   SeededRNG,
 } from '../types'
 import { createRNG } from '../rng'
@@ -18,17 +22,14 @@ import {
   type GridCanvas,
   type RoomPlacement,
   type ZoneDefinition,
-  type HullConfig,
-  type SpineConfig,
-  ARCHETYPE_DIMENSIONS,
 } from './types'
 
 import { createCanvas } from './canvas'
 import { carveHull, getDefaultHullConfig } from './hull'
 import { partitionZones, getDefaultZones } from './zones'
-import { carveSpine, getDefaultSpineConfig } from './spine'
-import { placeRooms, placeDoors, checkConnectivity, connectIsolatedRooms } from './rooms'
-import { convertToMapJSON, convertToDeckLayout, generateDebugOutput } from './convert'
+import { placeRoomsGraphFirst } from './roomPlacer'
+import { routeCorridors, placeDoors, ensureConnectivity } from './corridorRouter'
+import { convertToMapJSON, generateDebugOutput } from './convert'
 
 // ============================================================================
 // MAIN GENERATOR
@@ -120,24 +121,29 @@ export function generateGridMap(options: GridGeneratorOptions = {}): GridGenerat
     partitionZones(canvas, zones, rng)
     timing.zones = performance.now() - zonesStart
 
-    // Stage 3: Carve spine/corridor network
-    const spineStart = performance.now()
-    const spineConfig = getDefaultSpineConfig(archetype, subtype, sizeTier)
-    const junctions = carveSpine(canvas, spineConfig, rng)
-    timing.spine = performance.now() - spineStart
-
-    // Stage 4: Place rooms
+    // Stage 3: Place rooms (graph-first — rooms before corridors)
     const roomsStart = performance.now()
-    const placements = placeRooms(canvas, roomProgram, zones, rng)
+    const placements = placeRoomsGraphFirst(canvas, roomProgram, zones, rng)
     timing.rooms = performance.now() - roomsStart
 
-    // Stage 5: Check connectivity and connect isolated rooms
-    const connectivity = checkConnectivity(canvas, placements)
-    if (!connectivity.connected) {
-      connectIsolatedRooms(canvas, placements, connectivity.isolated)
-    }
+    // Stage 4: Route corridors between rooms (MST + loop edges)
+    const spineStart = performance.now()
+    const junctions = routeCorridors(canvas, placements, loopiness, rng)
+    timing.spine = performance.now() - spineStart
 
-    // Stage 6: Place doors
+    // Stage 5: Ensure all rooms are connected
+    const corridorTiles = new Set<string>()
+    for (let y = 0; y < canvas.height; y++) {
+      for (let x = 0; x < canvas.width; x++) {
+        const tile = canvas.tiles[y][x]
+        if (tile.type === TileType.CORRIDOR || tile.type === TileType.JUNCTION) {
+          corridorTiles.add(`${x},${y}`)
+        }
+      }
+    }
+    ensureConnectivity(canvas, placements, corridorTiles)
+
+    // Stage 6: Place doors at room-corridor boundaries
     const doorsStart = performance.now()
     placeDoors(canvas, placements)
     timing.doors = performance.now() - doorsStart
@@ -181,7 +187,6 @@ export type {
   RoomPlacement,
   ZoneDefinition,
   HullConfig,
-  SpineConfig,
 } from './types'
 
 export { TileType } from './types'
@@ -190,6 +195,7 @@ export { TileType } from './types'
 export { createCanvas } from './canvas'
 export { carveHull, getDefaultHullConfig } from './hull'
 export { partitionZones, getDefaultZones } from './zones'
-export { carveSpine, getDefaultSpineConfig } from './spine'
-export { placeRooms, placeDoors } from './rooms'
+export { placeRoomsGraphFirst } from './roomPlacer'
+export { routeCorridors, placeDoors } from './corridorRouter'
 export { convertToMapJSON, generateDebugOutput } from './convert'
+export { getAdjacencyWeight, mustBeExterior } from './adjacency'

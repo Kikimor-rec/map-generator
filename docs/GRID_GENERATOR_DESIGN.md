@@ -1,5 +1,18 @@
 # Grid-First + Zones Hybrid Generator
 
+> **STATUS: ACTIVE IMPLEMENTATION** — This is the current generation engine in `src/generators/gridGenerator/`.
+> The skeleton-based generator (`skeletonGenerator.ts`, `skeletonGeneratorV2.ts`) is the legacy approach.
+> Both engines coexist; the grid generator is the primary engine for new development.
+>
+> **Known Issues (2026-02-06):**
+> - Spine patterns produce predictable "one corridor + branches" layouts
+> - Room placement is greedy and ignores topology graph adjacency preferences
+> - The topology system (`topology.ts`) is not integrated with the grid generator
+> - These issues are the target of the upcoming generation rewrite
+>
+> See: `docs/research/facility_structure_research_2026-02-06.md` for updated room/adjacency rules
+> See: `docs/research/ttrpg_map_design_fundamentals-2026-02-06.md` for gameplay-driven layout principles
+
 ## Problem Statement
 
 Current generation approach has fundamental issues:
@@ -7,6 +20,9 @@ Current generation approach has fundamental issues:
 - Corridors pass through rooms (A* fallback ignores obstacles)
 - Room placement doesn't respect actual corridor structure
 - Chaotic layouts despite spine-based approach
+- **Spine-first approach produces boring linear layouts** (one main corridor with perpendicular branches)
+- **Room placement ignores adjacency rules** (rooms are placed wherever space exists, not where they logically belong)
+- **No gameplay-aware layout** (no chokepoints, flanking routes, or tactical spaces)
 
 ## Solution: Tile-Based Generation
 

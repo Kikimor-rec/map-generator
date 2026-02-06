@@ -338,12 +338,14 @@ export function MapCanvas() {
         // Create corridors container (below rooms)
         const corridorsContainer = new Container()
         corridorsContainer.name = 'corridors'
+        corridorsContainer.cullable = true
         worldContainer.addChild(corridorsContainer)
         corridorsContainerRef.current = corridorsContainer
 
         // Create junctions/line jumps container (above corridors)
         const junctionsContainer = new Container()
         junctionsContainer.name = 'junctions'
+        junctionsContainer.cullable = true
         worldContainer.addChild(junctionsContainer)
         junctionsContainerRef.current = junctionsContainer
 
@@ -352,6 +354,7 @@ export function MapCanvas() {
         roomsContainer.name = 'rooms'
         roomsContainer.interactive = true
         roomsContainer.interactiveChildren = true
+        roomsContainer.cullable = true
         worldContainer.addChild(roomsContainer)
         roomsContainerRef.current = roomsContainer
 

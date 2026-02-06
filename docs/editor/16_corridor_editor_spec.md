@@ -1,5 +1,7 @@
 # Corridor Editor + Auto-Routing — Техническое задание (браузерный 2D редактор)
 
+> **Note:** Corridor routing is now implemented in `src/generators/gridGenerator/corridorRouter.ts` (graph-first approach with MST + A*). This document may contain outdated design ideas from the spine-first era.
+
 Дата: 2025-12-17
 
 Документ описывает, как должны работать **коридоры** в редакторе sci-fi схем:

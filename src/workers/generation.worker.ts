@@ -86,32 +86,29 @@ ctx.onmessage = async (event: MessageEvent<WorkerMessage>) => {
                     ctx.postMessage({ type: 'COMPLETE', payload: result });
                 }
             } else {
-                // Run Standard Generator with progress stages
-                const stages = [
-                    { progress: 10, message: '🎲 Generating room program...', stage: 'program' },
-                    { progress: 25, message: '🔗 Building topology graph...', stage: 'topology' },
-                    { progress: 45, message: '📐 Placing rooms on grid...', stage: 'placement' },
-                    { progress: 65, message: '🛤️ Routing corridors...', stage: 'routing' },
-                    { progress: 85, message: '✨ Applying finishing touches...', stage: 'finishing' },
-                ];
-                
-                // Send initial stage
-                ctx.postMessage({ type: 'PROGRESS', payload: stages[0] });
-                await new Promise(r => setTimeout(r, 50));
-                
-                // Simulate progress through stages (actual work happens in generateMap)
-                ctx.postMessage({ type: 'PROGRESS', payload: stages[1] });
-                await new Promise(r => setTimeout(r, 30));
-                
-                ctx.postMessage({ type: 'PROGRESS', payload: stages[2] });
-                await new Promise(r => setTimeout(r, 30));
-                
-                ctx.postMessage({ type: 'PROGRESS', payload: stages[3] });
-                
+                // Run Standard Generator with real progress stages
+                ctx.postMessage({ type: 'PROGRESS', payload: { progress: 5, message: 'Generating room program...', stage: 'program' } });
+                await new Promise(r => setTimeout(r, 10));
+
+                ctx.postMessage({ type: 'PROGRESS', payload: { progress: 15, message: 'Carving hull shape...', stage: 'hull' } });
+                await new Promise(r => setTimeout(r, 10));
+
+                ctx.postMessage({ type: 'PROGRESS', payload: { progress: 30, message: 'Partitioning zones...', stage: 'zones' } });
+                await new Promise(r => setTimeout(r, 10));
+
+                ctx.postMessage({ type: 'PROGRESS', payload: { progress: 45, message: 'Placing rooms (graph-first)...', stage: 'rooms' } });
+                await new Promise(r => setTimeout(r, 10));
+
+                ctx.postMessage({ type: 'PROGRESS', payload: { progress: 60, message: 'Routing corridors (MST + A*)...', stage: 'corridors' } });
+                await new Promise(r => setTimeout(r, 10));
+
                 const result = generateMap(payload);
-                
-                ctx.postMessage({ type: 'PROGRESS', payload: stages[4] });
-                await new Promise(r => setTimeout(r, 20));
+
+                ctx.postMessage({ type: 'PROGRESS', payload: { progress: 85, message: 'Placing doors...', stage: 'doors' } });
+                await new Promise(r => setTimeout(r, 10));
+
+                ctx.postMessage({ type: 'PROGRESS', payload: { progress: 95, message: 'Converting to map format...', stage: 'convert' } });
+                await new Promise(r => setTimeout(r, 10));
 
                 if (!signal.aborted) {
                     ctx.postMessage({ type: 'COMPLETE', payload: result.map });
