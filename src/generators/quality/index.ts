@@ -74,9 +74,3 @@ export {
   calculateZoneAdherence,
 } from './scoring'
 export type { ScoreOptions } from './scoring'
-
-// Pipeline
-export {
-  runQualityPipeline,
-  generateWithQuality,
-} from './pipeline'

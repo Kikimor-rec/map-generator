@@ -23,9 +23,7 @@ import {
   type CandidateSelectionSummary,
 } from '@generators/index'
 import {
-  runQualityPipeline,
   type QualityMode,
-  type RefinementUpdate,
   QUALITY_MODE_CONFIGS,
 } from '@generators/quality'
 
@@ -533,9 +531,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     const generateVariant = (index: number): Promise<void> => {
       return new Promise((resolve) => {
         setTimeout(() => {
-          const variantSeed = generatorEngine === 'grid'
-            ? deriveGridCandidateSeed(masterSeed, index)
-            : `${masterSeed}-${index + 1}`
+          const variantSeed = deriveGridCandidateSeed(masterSeed, index)
 
           try {
             const options: GeneratorOptions = {
@@ -546,8 +542,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               styleProfile,
               loopiness,
               danger,
-              engine: generatorEngine,
-              gridCandidateCount: 1,
+              qualityProfile: 'draft',
               routing: routingOptions,
             }
 
@@ -559,13 +554,11 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
             const editorData = convertToEditorFormat(result.map, 0, routingOptions)
             const roomCount = editorData.rooms.length
             const corridorCount = editorData.corridors.length
-            const connectivityRatio = corridorCount > 0 ? roomCount / corridorCount : 0
-            const legacyScore = roomCount * 10 - Math.abs(connectivityRatio - 1.5) * 5
 
             newVariants.push({
               candidateIndex: index,
               seed: variantSeed,
-              score: legacyScore,
+              score: 0,
               hardPass: true,
               paretoRank: 0,
               hardIssues: [],
@@ -588,29 +581,24 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       await generateVariant(index)
     }
 
-    let rankedVariants = newVariants
-    if (generatorEngine === 'grid') {
-      const evaluations = rankGridCandidates(newVariants.map(variant => ({
-        index: variant.candidateIndex,
-        seed: variant.seed,
-        map: variant.map,
-      })), { archetype, sizeTier, loopiness })
-      const variantsByIndex = new Map(newVariants.map(variant => [variant.candidateIndex, variant]))
-      rankedVariants = evaluations.map(evaluation => ({
-        ...variantsByIndex.get(evaluation.index)!,
-        score: evaluation.balancedScore,
-        hardPass: evaluation.hardPass,
-        paretoRank: evaluation.paretoRank,
-        hardIssues: evaluation.hardIssues,
-        objectives: evaluation.objectives,
-      }))
-    } else {
-      rankedVariants.sort((a, b) => b.score - a.score)
-    }
+    const evaluations = rankGridCandidates(newVariants.map(variant => ({
+      index: variant.candidateIndex,
+      seed: variant.seed,
+      map: variant.map,
+    })), { archetype, sizeTier, loopiness })
+    const variantsByIndex = new Map(newVariants.map(variant => [variant.candidateIndex, variant]))
+    const rankedVariants = evaluations.map(evaluation => ({
+      ...variantsByIndex.get(evaluation.index)!,
+      score: evaluation.balancedScore,
+      hardPass: evaluation.hardPass,
+      paretoRank: evaluation.paretoRank,
+      hardIssues: evaluation.hardIssues,
+      objectives: evaluation.objectives,
+    }))
 
     setVariants(rankedVariants)
     setGenState(s => ({ ...s, isGenerating: false, progress: 100 }))
-  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, generatorEngine, variantCount, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, generateRandomSeed])
+  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, variantCount, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, generateRandomSeed])
 
   // Apply selected variant
   const handleApplyVariant = useCallback((index: number) => {

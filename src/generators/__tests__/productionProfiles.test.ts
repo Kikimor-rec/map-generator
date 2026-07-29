@@ -13,7 +13,9 @@ import {
   type GenerationQualityProfile,
 } from '../productionProfiles'
 import { generateLegacyMapForRegression } from '../compatibility'
+import * as compatibilityGenerators from '../compatibility'
 import * as productionGenerators from '../index'
+import * as qualityGenerators from '../quality'
 
 const PROFILE_COUNTS = {
   draft: { xs: 1, sm: 1, md: 1, lg: 1, xl: 1 },
@@ -245,5 +247,15 @@ describe('legacy compatibility boundary', () => {
     expect(productionExports).not.toHaveProperty('validateLayout')
     expect(productionExports).not.toHaveProperty('runQualityPipeline')
     expect(productionExports).not.toHaveProperty('generateWithQuality')
+  })
+
+  it('exposes quality-pipeline runtime entry points only through compatibility', () => {
+    const compatibilityExports = compatibilityGenerators as Record<string, unknown>
+    const qualityExports = qualityGenerators as Record<string, unknown>
+
+    expect(compatibilityExports).toHaveProperty('runQualityPipeline')
+    expect(compatibilityExports).toHaveProperty('generateWithQuality')
+    expect(qualityExports).not.toHaveProperty('runQualityPipeline')
+    expect(qualityExports).not.toHaveProperty('generateWithQuality')
   })
 })
