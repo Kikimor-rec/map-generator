@@ -1,5 +1,12 @@
 # Архитектура процедурного генератора
 
+> **Current status (2026-07-29):** The occupancy-grid engine is the only
+> production target. The stages below describe the legacy generator and remain
+> historical/compatibility material. `quality/pipeline.ts` is not a second
+> production target; Phase 1 may extract reusable validation/scoring and retire
+> its independent generation path. Production dispatch changes are deferred to
+> Phase 1. See [ADR: Active Production Generator](./ACTIVE_GENERATOR_ADR.md).
+
 ## Обзор
 
 Процедурный генератор создаёт карты космических кораблей, станций и аванпостов на основе параметров. Реализован 8-этапный пайплайн согласно спецификациям в `docs/generator/`.

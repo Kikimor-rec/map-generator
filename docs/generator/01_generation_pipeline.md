@@ -1,5 +1,13 @@
 # Generation Pipeline (clean draft)
 
+> **Current status (2026-07-29):** The occupancy-grid engine is the only
+> production target. The descriptive stages below are legacy
+> historical/compatibility material, not a second production engine.
+> `quality/pipeline.ts` may contribute extracted validation/scoring only; Phase
+> 1 owns extraction, retirement of its independent generation path, and removal
+> of legacy/quality production dispatch. See
+> [ADR: Active Production Generator](../architecture/ACTIVE_GENERATOR_ADR.md).
+
 This replaces the corrupted version and matches the current code paths in `src/generators`.
 
 ## High-Level Stages
