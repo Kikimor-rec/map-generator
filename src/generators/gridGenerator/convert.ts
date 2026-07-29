@@ -24,6 +24,7 @@ import { getTile, getBoundingBox, DIRECTIONS_4 } from './canvas'
 import { buildCorridorGraph, getTileConnectorIds, parseConnectorId } from './corridorGraph'
 import { calculateGridMetrics } from './metrics'
 import { validateTTRPGPlayability } from './playabilityValidator'
+import { validateMapAesthetics } from './aestheticValidator'
 import { GEOMETRY_UNITS_PER_CELL } from '../../domain/geometryUnits'
 import { extractFacilityEnvelope } from './geometry'
 
@@ -529,6 +530,7 @@ function buildMeta(
   const playability = validateTTRPGPlayability(canvas, placements, {
     requestedLoopiness: request.loopiness,
   })
+  const aesthetics = validateMapAesthetics(canvas, placements)
   return {
     name: `${request.archetype.charAt(0).toUpperCase() + request.archetype.slice(1)} ${request.subtype}`,
     archetype: request.archetype,
@@ -563,6 +565,13 @@ function buildMeta(
       playabilityViolationCodes: playability.violations.map(issue => issue.code),
       throughRoomCount: placements.filter(room => room.circulationRole === 'through').length,
       circulationHubRoomCount: placements.filter(room => room.circulationRole === 'hub').length,
+      aestheticStatus: aesthetics.status,
+      aestheticViolationCodes: aesthetics.violations.map(issue => issue.code),
+      hullUtilizationPercent: aesthetics.metrics.hullUtilizationPercent,
+      corridorTurnRatio: aesthetics.metrics.corridorTurnRatio,
+      clusteredJunctionPairs: aesthetics.metrics.clusteredJunctionPairCount,
+      ambiguousDoorCount: aesthetics.metrics.ambiguousDoorCount,
+      doorMetadataMismatchCount: aesthetics.metrics.doorMetadataMismatchCount,
     },
     tags: [
       request.archetype,

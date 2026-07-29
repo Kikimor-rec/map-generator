@@ -213,3 +213,10 @@ export {
   type PlayabilityValidationOptions,
   type PlayabilityViolation,
 } from './playabilityValidator'
+export {
+  getAestheticThresholds,
+  validateMapAesthetics,
+  type AestheticReport,
+  type AestheticValidationOptions,
+  type AestheticViolation,
+} from './aestheticValidator'

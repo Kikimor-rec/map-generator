@@ -173,6 +173,13 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       isolatedRooms?: number
       junctionCount?: number
       deadEndRatio?: number
+      aestheticStatus?: 'pass' | 'warning' | 'error'
+      aestheticViolationCodes?: string[]
+      hullUtilizationPercent?: number
+      corridorTurnRatio?: number
+      clusteredJunctionPairs?: number
+      ambiguousDoorCount?: number
+      doorMetadataMismatchCount?: number
     }
     viewport: { x: number; y: number; zoom: number }
   } | null>(null)
@@ -393,6 +400,13 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 isolatedRooms: metaData.ttrpgMetrics?.isolatedRooms,
                 junctionCount: metaData.ttrpgMetrics?.junctionCount,
                 deadEndRatio: metaData.ttrpgMetrics?.deadEndRatio,
+                aestheticStatus: metaData.ttrpgMetrics?.aestheticStatus,
+                aestheticViolationCodes: metaData.ttrpgMetrics?.aestheticViolationCodes,
+                hullUtilizationPercent: metaData.ttrpgMetrics?.hullUtilizationPercent,
+                corridorTurnRatio: metaData.ttrpgMetrics?.corridorTurnRatio,
+                clusteredJunctionPairs: metaData.ttrpgMetrics?.clusteredJunctionPairs,
+                ambiguousDoorCount: metaData.ttrpgMetrics?.ambiguousDoorCount,
+                doorMetadataMismatchCount: metaData.ttrpgMetrics?.doorMetadataMismatchCount,
               },
               viewport: fitViewportForEditorData(editorData),
             })
@@ -1108,6 +1122,31 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   <span>Junctions: {previewData.diagnostics.junctionCount ?? '?'}</span>
                   <span>Dead ends: {previewData.diagnostics.deadEndRatio ?? '?'}</span>
                 </div>
+                {previewData.diagnostics.aestheticStatus && (
+                  <div className={`rounded border p-2 text-[11px] ${
+                    previewData.diagnostics.aestheticStatus === 'pass'
+                      ? 'border-green-500/40 bg-green-500/10 text-green-300'
+                      : previewData.diagnostics.aestheticStatus === 'error'
+                        ? 'border-red-500/50 bg-red-500/10 text-red-300'
+                        : 'border-amber-500/50 bg-amber-500/10 text-amber-200'
+                  }`}>
+                    <div className="flex items-center justify-between font-medium">
+                      <span>Automatic visual review</span>
+                      <span className="uppercase">{previewData.diagnostics.aestheticStatus}</span>
+                    </div>
+                    <div className="mt-1 grid grid-cols-2 gap-x-2 text-space-300">
+                      <span>Hull use: {previewData.diagnostics.hullUtilizationPercent ?? '?'}%</span>
+                      <span>Turn ratio: {previewData.diagnostics.corridorTurnRatio ?? '?'}</span>
+                      <span>Close junctions: {previewData.diagnostics.clusteredJunctionPairs ?? '?'}</span>
+                      <span>Unclear doors: {previewData.diagnostics.ambiguousDoorCount ?? '?'}</span>
+                    </div>
+                    {(previewData.diagnostics.aestheticViolationCodes?.length ?? 0) > 0 && (
+                      <div className="mt-1 text-space-400">
+                        {previewData.diagnostics.aestheticViolationCodes?.join(' · ')}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="flex gap-2">
                   <button
                     onClick={handleApplyPreview}

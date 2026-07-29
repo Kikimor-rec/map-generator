@@ -363,6 +363,13 @@ export interface TTRPGMetrics {
   playabilityViolationCodes?: string[]
   throughRoomCount?: number
   circulationHubRoomCount?: number
+  aestheticStatus?: 'pass' | 'warning' | 'error'
+  aestheticViolationCodes?: string[]
+  hullUtilizationPercent?: number
+  corridorTurnRatio?: number
+  clusteredJunctionPairs?: number
+  ambiguousDoorCount?: number
+  doorMetadataMismatchCount?: number
 }
 
 export interface ValidationIssue {

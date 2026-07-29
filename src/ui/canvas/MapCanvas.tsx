@@ -2103,7 +2103,7 @@ export function MapCanvas() {
     }
   }, [handleMouseUp])
 
-  const handleWheel = useCallback((e: React.WheelEvent) => {
+  const handleWheel = useCallback((e: WheelEvent) => {
     e.preventDefault()
     
     const rect = containerRef.current?.getBoundingClientRect()
@@ -2135,6 +2135,16 @@ export function MapCanvas() {
       y: mouseY - worldY * newZoom,
     }))
   }, [viewport, dispatch])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+
+    container.addEventListener('wheel', handleWheel, { passive: false })
+    return () => {
+      container.removeEventListener('wheel', handleWheel)
+    }
+  }, [handleWheel, isReady])
 
   // Function to finish corridor drawing - defined before handleKeyDown that uses it
   const finishCorridorDrawing = useCallback(() => {
@@ -2675,7 +2685,6 @@ export function MapCanvas() {
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onDoubleClick={handleDoubleClick}
-        onWheel={handleWheel}
         onContextMenu={handleContextMenu}
       />
       
