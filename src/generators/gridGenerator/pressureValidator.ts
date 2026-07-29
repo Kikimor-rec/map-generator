@@ -1,6 +1,8 @@
-import { DIRECTIONS_4, getTile } from './canvas'
+import { getTile } from './canvas'
+import type { DeckPressureTopology } from '../types'
 import type { DoorAccessMetadata, DoorSemantic } from './doorClassifier'
 import { TileType, type GridCanvas, type Point, type RoomPlacement } from './types'
+import { findExteriorHatchFace } from './pressureTopology'
 
 export type PressureViolationCode =
   | 'AIRLOCK_WITHOUT_INTERNAL_DOOR'
@@ -9,6 +11,9 @@ export type PressureViolationCode =
   | 'INVALID_AIRLOCK_DOOR_METADATA'
   | 'INVALID_BULKHEAD_DOOR_METADATA'
   | 'EXTERIOR_HATCH_NOT_MATERIALIZED'
+  | 'INVALID_EXTERIOR_HATCH_METADATA'
+  | 'INVALID_AIRLOCK_INTERLOCK_GROUP'
+  | 'PRESSURE_COMPARTMENT_MISSING'
 
 export interface PressureMetrics {
   airlockRoomCount: number
@@ -19,6 +24,9 @@ export interface PressureMetrics {
   invalidPressureDoorCount: number
   exteriorHatchCount: number
   unresolvedExteriorHatchCount: number
+  pressureCompartmentCount: number
+  interlockGroupCount: number
+  invalidInterlockGroupCount: number
 }
 
 export interface PressureViolation {
@@ -44,7 +52,8 @@ interface DoorRecord {
 
 export function validatePressureTopology(
   canvas: GridCanvas,
-  placements: readonly RoomPlacement[]
+  placements: readonly RoomPlacement[],
+  topology?: DeckPressureTopology
 ): PressureReport {
   const violations: PressureViolation[] = []
   let airlockRoomCount = 0
@@ -54,6 +63,8 @@ export function validatePressureTopology(
   let pressureBoundaryDoorCount = 0
   let invalidPressureDoorCount = 0
 
+  let validExteriorHatchCount = 0
+  let invalidInterlockGroupCount = 0
   for (const placement of placements) {
     const doors = placement.doorPositions.map(position =>
       readDoor(canvas, position)
@@ -95,7 +106,7 @@ export function validatePressureTopology(
       })
     }
 
-    if (isExterior && !roomTouchesHullBoundary(canvas, placement)) {
+    if (isExterior && !findExteriorHatchFace(canvas, placement)) {
       valid = false
       violations.push({
         code: 'EXTERIOR_AIRLOCK_OFF_HULL',
@@ -139,17 +150,77 @@ export function validatePressureTopology(
       })
     }
 
+    if (topology) {
+      const group = topology.interlockGroups.find(
+        candidate => candidate.chamberRoomId === placement.roomId
+      )
+      const expectedInnerPortIds = placement.doorPositions.map(
+        (_door, index) => `port-${placement.roomId}-${index}`
+      )
+      if (
+        !group ||
+        group.id !== `interlock:${placement.roomId}` ||
+        !sameStringSet(group.innerPortIds, expectedInnerPortIds)
+      ) {
+        valid = false
+        invalidInterlockGroupCount += 1
+        violations.push({
+          code: 'INVALID_AIRLOCK_INTERLOCK_GROUP',
+          severity: 'error',
+          message: 'Airlock thresholds do not share one stable chamber interlock group.',
+          roomIds: [placement.roomId],
+          hint: 'Bind all inner thresholds and the optional outer hatch to the same interlock group.',
+        })
+      }
+
+      const chamberId = `pressure:airlock:${placement.roomId}`
+      if (!topology.compartments.some(compartment =>
+        compartment.id === chamberId &&
+        compartment.kind === 'airlock' &&
+        compartment.roomIds.includes(placement.roomId)
+      )) {
+        valid = false
+        violations.push({
+          code: 'PRESSURE_COMPARTMENT_MISSING',
+          severity: 'error',
+          message: 'An airlock room has no explicit chamber compartment.',
+          roomIds: [placement.roomId],
+          hint: 'Materialize one cycling pressure compartment for the airlock room.',
+        })
+      }
+
+      if (isExterior) {
+        const hatch = topology.exteriorHatches.find(
+          candidate => candidate.roomId === placement.roomId
+        )
+        if (hatch && isValidExteriorHatch(canvas, topology, placement, hatch, group)) {
+          validExteriorHatchCount += 1
+        } else if (hatch) {
+          valid = false
+          invalidInterlockGroupCount += 1
+          violations.push({
+            code: 'INVALID_EXTERIOR_HATCH_METADATA',
+            severity: 'error',
+            message: 'The vacuum-facing hatch does not complete the airlock pressure chain.',
+            roomIds: [placement.roomId],
+            hint: 'Connect chamber and exterior compartments through the same interlock group as the inner hatch.',
+          })
+        }
+      }
+    }
+
     if (valid) validAirlockRoomCount += 1
   }
 
-  // The active MapJSON contract has room-side ports only. Keep this explicit:
-  // an exterior docking chamber can validly terminate circulation, but it is
-  // not a complete two-hatch simulation until the outer hatch is materialized.
-  if (exteriorAirlockRoomCount > 0) {
+  const unresolvedExteriorHatchCount =
+    Math.max(0, exteriorAirlockRoomCount - validExteriorHatchCount)
+  if (unresolvedExteriorHatchCount > 0) {
     violations.push({
       code: 'EXTERIOR_HATCH_NOT_MATERIALIZED',
-      severity: 'warning',
-      message: 'Exterior airlock intent is valid, but the outer vacuum-facing hatch is not serialized yet.',
+      severity: topology ? 'error' : 'warning',
+      message: topology
+        ? 'Exterior airlock topology is missing a valid vacuum-facing hatch.'
+        : 'Exterior airlock intent is valid, but the outer vacuum-facing hatch is not serialized yet.',
       roomIds: placements
         .filter(room =>
           room.program.isExterior &&
@@ -167,8 +238,11 @@ export function validatePressureTopology(
     internalAirlockRoomCount,
     pressureBoundaryDoorCount,
     invalidPressureDoorCount,
-    exteriorHatchCount: 0,
-    unresolvedExteriorHatchCount: exteriorAirlockRoomCount,
+    exteriorHatchCount: topology?.exteriorHatches.length ?? 0,
+    unresolvedExteriorHatchCount,
+    pressureCompartmentCount: topology?.compartments.length ?? 0,
+    interlockGroupCount: topology?.interlockGroups.length ?? 0,
+    invalidInterlockGroupCount,
   }
 
   return {
@@ -205,24 +279,6 @@ function isValidPressureDoor(door: DoorRecord): boolean {
   return !door.access.interlocked
 }
 
-function roomTouchesHullBoundary(
-  canvas: GridCanvas,
-  placement: RoomPlacement
-): boolean {
-  const mask = canvas.originalHullMask
-  return placement.tiles.some(point =>
-    DIRECTIONS_4.some(direction => {
-      const x = point.x + direction.x
-      const y = point.y + direction.y
-      if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) {
-        return true
-      }
-      if (mask) return !mask[y][x]
-      return getTile(canvas, x, y)?.type === TileType.VOID
-    })
-  )
-}
-
 function normalizeRoomType(roomType: string): string {
   return roomType.trim().toLowerCase().replace(/[\s_-]+/g, '')
 }
@@ -237,4 +293,37 @@ function deduplicateViolations(
     seen.add(key)
     return true
   })
+}
+
+function isValidExteriorHatch(
+  canvas: GridCanvas,
+  topology: DeckPressureTopology,
+  placement: RoomPlacement,
+  hatch: DeckPressureTopology['exteriorHatches'][number],
+  group: DeckPressureTopology['interlockGroups'][number] | undefined
+): boolean {
+  const chamberId = `pressure:airlock:${placement.roomId}`
+  const expectedFace = findExteriorHatchFace(canvas, placement)
+  return (
+    hatch.doorType === 'airlock' &&
+    hatch.pressureRole === 'outer-hatch' &&
+    hatch.pressureBoundary &&
+    hatch.fromCompartmentId === chamberId &&
+    hatch.toCompartmentId === topology.outsideCompartmentId &&
+    topology.compartments.some(compartment => compartment.id === chamberId) &&
+    topology.compartments.some(
+      compartment => compartment.id === topology.outsideCompartmentId
+    ) &&
+    group?.id === hatch.interlockGroupId &&
+    group?.outerHatchId === hatch.id &&
+    expectedFace?.wall === hatch.wall &&
+    expectedFace.position.x === hatch.position.x &&
+    expectedFace.position.y === hatch.position.y
+  )
+}
+
+function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  const expected = new Set(b)
+  return a.every(value => expected.has(value))
 }

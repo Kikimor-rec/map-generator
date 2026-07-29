@@ -815,6 +815,32 @@ export function MapCanvas() {
           doorGraphics.lineStyle(1.5, 0xffffff, 0.9)
           doorGraphics.drawCircle(door.position.x, door.position.y, 3)
           doorGraphics.drawCircle(door.position.x, door.position.y, 6)
+          if (door.pressureRole === 'outer-hatch') {
+            const offset = 13
+            doorGraphics.lineStyle(2, colors.stroke, 1)
+            switch (door.boundarySide) {
+              case 'top':
+                doorGraphics.moveTo(door.position.x - 5, door.position.y - offset + 4)
+                doorGraphics.lineTo(door.position.x, door.position.y - offset)
+                doorGraphics.lineTo(door.position.x + 5, door.position.y - offset + 4)
+                break
+              case 'bottom':
+                doorGraphics.moveTo(door.position.x - 5, door.position.y + offset - 4)
+                doorGraphics.lineTo(door.position.x, door.position.y + offset)
+                doorGraphics.lineTo(door.position.x + 5, door.position.y + offset - 4)
+                break
+              case 'left':
+                doorGraphics.moveTo(door.position.x - offset + 4, door.position.y - 5)
+                doorGraphics.lineTo(door.position.x - offset, door.position.y)
+                doorGraphics.lineTo(door.position.x - offset + 4, door.position.y + 5)
+                break
+              case 'right':
+                doorGraphics.moveTo(door.position.x + offset - 4, door.position.y - 5)
+                doorGraphics.lineTo(door.position.x + offset, door.position.y)
+                doorGraphics.lineTo(door.position.x + offset - 4, door.position.y + 5)
+                break
+            }
+          }
         } else if (door.type === DoorType.Blast) {
           doorGraphics.lineStyle(1.5, 0xffffff, 0.9)
           doorGraphics.moveTo(door.position.x - 3, door.position.y - 3)

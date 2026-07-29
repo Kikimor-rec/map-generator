@@ -154,11 +154,29 @@ Current limits:
 Ошибки становятся hard gates для свежих grid candidates. Validator read-only:
 он не переносит комнату и не придумывает недостающий corridor.
 
-Текущий MapJSON всё ещё хранит только room-side ports. Поэтому внешний terminal
-airlock с одной корректной внутренней связью получает честное предупреждение
-`EXTERIOR_HATCH_NOT_MATERIALIZED`: vacuum-facing hatch, его port role и общий
-interlock group ещё не сериализуются.
 
-Полный pressure graph
-`vacuum -> outer hatch -> chamber -> inner hatch -> pressurized compartment`
-и runtime pressure states остаются следующей итерацией.
+## 6.11 Materialized static pressure topology v1
+
+Fresh grid maps now serialize an optional `deck.pressure` block. The minimal
+authoritative ingress chain is:
+
+`exterior -> outer hatch -> airlock chamber -> inner hatch -> facility`
+
+Rules:
+
+- an exterior docking airlock may remain a terminal circulation room;
+- the outer hatch is a room port with `connectorId=null`, never a fake corridor
+  outside the hull;
+- outer and inner hatches share one stable `interlockGroupId`;
+- each airlock owns a cycling chamber compartment;
+- ship/station exterior is nominally `vacuum`; outpost exterior remains
+  explicitly `unknown`;
+- hatch placement only accepts void flood-connected to the canvas boundary, so
+  enclosed structural voids cannot be mistaken for open space;
+- missing or inconsistent materialized topology is a hard error for fresh grid
+  candidates. Calling the validator without a topology block remains a legacy
+  compatibility warning.
+
+This is a static topology, not runtime decompression simulation. The main
+facility is still one coarse pressurized compartment; bulkhead-separated
+component solving, door states, damage and gas propagation remain future work.

@@ -13,6 +13,7 @@ import type {
   Point,
   GenerationRequest,
   RoomProgram,
+  DeckPressureTopology,
 } from '../types'
 import {
   TileType,
@@ -29,6 +30,12 @@ import { GEOMETRY_UNITS_PER_CELL } from '../../domain/geometryUnits'
 import { extractFacilityEnvelope, extractStructuralVoids } from './geometry'
 import { validateFacilityStructure } from './facilityValidator'
 import { validatePressureTopology } from './pressureValidator'
+import {
+  buildDeckPressureTopology,
+  getAirlockCompartmentId,
+  getInterlockGroupId,
+  getPressureCompartmentId,
+} from './pressureTopology'
 
 // ============================================================================
 // MAIN CONVERSION
@@ -44,8 +51,12 @@ export function convertToMapJSON(
   request: GenerationRequest,
   roomProgram: RoomProgram
 ): MapJSON {
-  const deckLayout = convertToDeckLayout(canvas, placements, zones)
-  const meta = buildMeta(request, roomProgram, placements, deckLayout.connectors, deckLayout.junctions, canvas)
+  const pressure = buildDeckPressureTopology(canvas, placements)
+  const deckLayout = convertToDeckLayout(canvas, placements, zones, pressure)
+  const meta = buildMeta(
+    request, roomProgram, placements, deckLayout.connectors,
+    deckLayout.junctions, canvas, pressure
+  )
 
   return {
     version: '1.0.0',
@@ -73,6 +84,7 @@ export function convertToMapJSON(
           facilityEnvelope: extractFacilityEnvelope(canvas),
           structuralVoids: extractStructuralVoids(canvas),
         },
+        pressure,
       },
     ],
   }
@@ -84,9 +96,14 @@ export function convertToMapJSON(
 export function convertToDeckLayout(
   canvas: GridCanvas,
   placements: RoomPlacement[],
-  zones: ZoneDefinition[]
+  zones: ZoneDefinition[],
+  pressure: DeckPressureTopology = buildDeckPressureTopology(
+    canvas, placements
+  )
 ): DeckLayout {
-  const rooms = placements.map(p => convertPlacementToLayoutRoom(p, canvas, zones))
+  const rooms = placements.map(p =>
+    convertPlacementToLayoutRoom(p, canvas, zones, pressure)
+  )
   const corridors = extractCorridors(canvas, placements)
   const junctions = extractJunctions(canvas)
 
@@ -97,6 +114,7 @@ export function convertToDeckLayout(
     rooms,
     connectors: corridors,
     junctions,
+    pressure,
   }
 }
 
@@ -110,18 +128,27 @@ export function convertToDeckLayout(
 function convertPlacementToLayoutRoom(
   placement: RoomPlacement,
   canvas: GridCanvas,
-  zones: ZoneDefinition[]
+  zones: ZoneDefinition[],
+  pressure: DeckPressureTopology
 ): LayoutRoom {
   const tileSize = canvas.tileSize
 
   // Find door positions as ports
-  const ports = placement.doorPositions.map((door, idx) => {
+  const ports: LayoutRoom['ports'] = placement.doorPositions.map((door, idx) => {
     // Determine which wall the door is on
     const wall = determineDoorWall(door, placement)
-    const doorSemantic = getTile(canvas, door.x, door.y)?.metadata?.doorSemantic
+    const doorTile = getTile(canvas, door.x, door.y)
+    const doorSemantic = doorTile?.metadata?.doorSemantic
     const doorType = typeof doorSemantic === 'string'
       ? doorSemantic
       : undefined
+    const isAirlockRoom = normalizeRoomType(placement.roomType) === 'airlock'
+    const pressureBoundary =
+      doorTile?.metadata?.doorAccess &&
+      typeof doorTile.metadata.doorAccess === 'object' &&
+      'pressureBoundary' in doorTile.metadata.doorAccess
+        ? Boolean(doorTile.metadata.doorAccess.pressureBoundary)
+        : undefined
 
     const position = projectDoorTileToRoomWall(door, placement, tileSize)
     return {
@@ -131,8 +158,44 @@ function convertPlacementToLayoutRoom(
       wall,
       connectorId: `corridor-${door.x}-${door.y}`,
       doorType,
+      pressureRole:
+        isAirlockRoom ? 'inner-hatch' :
+        doorSemantic === 'bulkhead' ? 'bulkhead' :
+        undefined,
+      pressureBoundary,
+      interlockGroupId: isAirlockRoom
+        ? getInterlockGroupId(placement.roomId)
+        : undefined,
+      fromCompartmentId: isAirlockRoom
+        ? getAirlockCompartmentId(placement.roomId)
+        : undefined,
+      toCompartmentId: isAirlockRoom
+        ? pressure.compartments.find(compartment =>
+            compartment.kind === 'pressurized'
+          )?.id
+        : undefined,
     }
   })
+
+  const exteriorHatch = pressure.exteriorHatches.find(
+    hatch => hatch.roomId === placement.roomId
+  )
+  if (exteriorHatch) {
+    ports.push({
+      id: exteriorHatch.portId,
+      x: exteriorHatch.position.x,
+      y: exteriorHatch.position.y,
+      wall: exteriorHatch.wall,
+      connectorId: null,
+      doorType: exteriorHatch.doorType,
+      pressureRole: exteriorHatch.pressureRole,
+      pressureBoundary: exteriorHatch.pressureBoundary,
+      interlockGroupId: exteriorHatch.interlockGroupId,
+      fromCompartmentId: exteriorHatch.fromCompartmentId,
+      toCompartmentId: exteriorHatch.toCompartmentId,
+      exterior: true,
+    })
+  }
 
   return {
     id: placement.roomId,
@@ -152,6 +215,7 @@ function convertPlacementToLayoutRoom(
     tags: placement.program.tags,
     circulationRole: placement.circulationRole,
     interruptsBackbone: placement.interruptsBackbone,
+    pressureCompartmentId: getPressureCompartmentId(placement),
   }
 }
 
@@ -597,7 +661,8 @@ function buildMeta(
   placements: RoomPlacement[],
   connectors: LayoutConnector[],
   junctions: Junction[],
-  canvas: GridCanvas
+  canvas: GridCanvas,
+  pressureTopology: DeckPressureTopology
 ): MapMeta {
   const gridMetrics = calculateGridMetrics(canvas, placements, connectors, junctions)
   const playability = validateTTRPGPlayability(canvas, placements, {
@@ -605,7 +670,7 @@ function buildMeta(
   })
   const aesthetics = validateMapAesthetics(canvas, placements)
   const facility = validateFacilityStructure(canvas)
-  const pressure = validatePressureTopology(canvas, placements)
+  const pressure = validatePressureTopology(canvas, placements, pressureTopology)
   return {
     name: `${request.archetype.charAt(0).toUpperCase() + request.archetype.slice(1)} ${request.subtype}`,
     archetype: request.archetype,
@@ -667,6 +732,9 @@ function buildMeta(
       invalidPressureDoorCount: pressure.metrics.invalidPressureDoorCount,
       exteriorHatchCount: pressure.metrics.exteriorHatchCount,
       unresolvedExteriorHatchCount: pressure.metrics.unresolvedExteriorHatchCount,
+      pressureCompartmentCount: pressure.metrics.pressureCompartmentCount,
+      interlockGroupCount: pressure.metrics.interlockGroupCount,
+      invalidInterlockGroupCount: pressure.metrics.invalidInterlockGroupCount,
     },
     tags: [
       request.archetype,
@@ -675,6 +743,10 @@ function buildMeta(
       'grid-generated',
     ],
   }
+}
+
+function normalizeRoomType(roomType: string): string {
+  return roomType.trim().toLowerCase().replace(/[\s_-]+/g, '')
 }
 
 // ============================================================================

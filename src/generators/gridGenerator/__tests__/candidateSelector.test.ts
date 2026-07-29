@@ -35,6 +35,8 @@ function makeMetrics(overrides: Partial<TTRPGMetrics> = {}): TTRPGMetrics {
     structuralVoidCollisionCount: 0,
     silhouetteFitScore: 100,
     pressureStatus: 'pass',
+    unresolvedExteriorHatchCount: 0,
+    invalidInterlockGroupCount: 0,
     invalidPressureDoorCount: 0,
     playabilityViolationCodes: [],
     aestheticViolationCodes: [],

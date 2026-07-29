@@ -233,7 +233,7 @@
 | Размещение дверей на стенах | ✅ | Автоопределение ближайшей стены |
 | Отрисовка дверей | ✅ | Цвет по типу |
 | Автоматические двери при генерации | ✅ | Все room ports получают standard/secure/bulkhead/airlock semantic; MapJSON/editor bridge готов |
-| Pressurization graph и полный двухстворчатый шлюз | ⚠️ | Read-only room-side validator и hard gates готовы; external second hatch, shared interlock group и compartment solve впереди |
+| Pressurization graph и полный двухстворчатый шлюз | ⚠️ | Static topology v1 готова: exterior hatch, chamber compartment, shared interlock group, editor glyph и hard gates; полный component solve/runtime states/ручное редактирование впереди |
 
 ### 6.2 Расширенная система коридоров
 | Задача | Статус | Примечания |

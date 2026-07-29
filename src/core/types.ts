@@ -548,6 +548,8 @@ export enum DoorType {
   Secure = 'secure',
 }
 
+export type PressureBoundaryRole = 'inner-hatch' | 'outer-hatch' | 'bulkhead'
+
 export interface Door {
   id: string
   type: DoorType
@@ -557,6 +559,13 @@ export interface Door {
   isOpen: boolean
   isLocked: boolean
   securityLevel: number
+  pressureRole?: PressureBoundaryRole
+  pressureBoundary?: boolean
+  interlockGroupId?: string
+  fromCompartmentId?: string
+  toCompartmentId?: string
+  exterior?: boolean
+  boundarySide?: 'top' | 'bottom' | 'left' | 'right'
 }
 
 // ============================================================================
@@ -758,6 +767,48 @@ export interface DeckGeometry {
   structuralVoids: readonly MultiPolygon[]
 }
 
+export type PressureCompartmentKind = 'exterior' | 'pressurized' | 'airlock'
+export type PressureNominalState = 'vacuum' | 'pressurized' | 'cycling' | 'unknown'
+export type ExternalEnvironment = 'vacuum' | 'unknown'
+
+export interface PressureCompartment {
+  id: string
+  label: string
+  kind: PressureCompartmentKind
+  nominalState: PressureNominalState
+  roomIds: string[]
+}
+
+export interface PressureHatch {
+  id: string
+  roomId: string
+  portId: string
+  wall: 'top' | 'bottom' | 'left' | 'right'
+  position: Point
+  doorType: 'airlock'
+  pressureRole: 'outer-hatch'
+  pressureBoundary: true
+  interlockGroupId: string
+  fromCompartmentId: string
+  toCompartmentId: string
+}
+
+export interface PressureInterlockGroup {
+  id: string
+  chamberRoomId: string
+  innerPortIds: string[]
+  outerHatchId?: string
+}
+
+export interface DeckPressureTopology {
+  version: 1
+  outsideCompartmentId: string
+  externalEnvironment: ExternalEnvironment
+  compartments: PressureCompartment[]
+  exteriorHatches: PressureHatch[]
+  interlockGroups: PressureInterlockGroup[]
+}
+
 export interface Deck {
   id: string
   name: string
@@ -770,6 +821,8 @@ export interface Deck {
   lineJumps?: CorridorLineJump[]
   /** Optional canonical facility envelope; absent on legacy projects. */
   geometry?: DeckGeometry
+  /** Optional static pressure topology; absent on legacy projects. */
+  pressure?: DeckPressureTopology
 }
 
 export interface MapProject {

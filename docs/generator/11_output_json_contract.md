@@ -74,6 +74,14 @@ tile mask и сохраняет его через этот bridge. `structuralVo
 - `side`: "N"|"E"|"S"|"W"|"custom"
 - `pos`: {x,y}
 - `door`: {doorType, lockLevel, isBulkhead}
+- `connectorId`: string|null
+- `pressureRole`: `"inner-hatch"|"outer-hatch"|"bulkhead"` (optional)
+- `pressureBoundary`: boolean (optional)
+- `interlockGroupId`: string (optional)
+- `fromCompartmentId`, `toCompartmentId`: string (optional)
+- `exterior`: boolean (optional)
+- exterior hatch ports use `connectorId: null`;
+- legacy room/corridor ports keep a string connector ID.
 
 ## 11.5 Connector
 - `id`
@@ -110,13 +118,52 @@ tile mask и сохраняет его через этот bridge. `structuralVo
 - текущий occupancy mask→envelope: `src/generators/gridGenerator/geometry.ts`;
 - geometry units→Pixi pixels: `src/ui/canvas/deckGeometry.ts`.
 
-Mask→polygon нужен для совместимости текущего генератора. Active V2 уже
-экспортирует не общий прямоугольник, а occupancy mask после архетипного
-`carveHull` для ship/station/outpost; containment, silhouette и deterministic
-envelope покрыты acceptance-тестами. Это всё ещё не завершённая внутренняя
-грамматика: primary circulation уже различается по архетипам, но ship service
-loop, semantic `structuralVoids`, polygon room editing и функциональные props
-ещё отсутствуют.
+Mask-to-polygon conversion keeps the current occupancy generator compatible
+with canonical vector geometry. Active grid maps export the archetype-specific
+post-`carveHull` mask rather than one bounding rectangle. Containment,
+silhouette and deterministic envelope behavior are covered by acceptance tests.
+The internal grammar is still incomplete: service loops, typed structural
+voids, polygon room editing and functional props remain future work.
+
+## 11.7.2 Static pressure topology v1
+
+Fresh grid decks may contain:
+
+```ts
+pressure: {
+  version: 1,
+  outsideCompartmentId: string,
+  externalEnvironment: "vacuum" | "unknown",
+  compartments: Array<{
+    id: string,
+    label: string,
+    kind: "exterior" | "pressurized" | "airlock",
+    nominalState: "vacuum" | "pressurized" | "cycling" | "unknown",
+    roomIds: string[]
+  }>,
+  exteriorHatches: Array<{
+    id: string,
+    roomId: string,
+    portId: string,
+    wall: "top" | "bottom" | "left" | "right",
+    position: {x: number, y: number},
+    pressureRole: "outer-hatch",
+    pressureBoundary: true,
+    interlockGroupId: string,
+    fromCompartmentId: string,
+    toCompartmentId: string
+  }>,
+  interlockGroups: Array<{
+    id: string,
+    chamberRoomId: string,
+    innerPortIds: string[],
+    outerHatchId?: string
+  }>
+}
+```
+
+The block is optional for legacy documents. V1 stores a coarse main facility
+compartment plus explicit airlock chambers and exterior environment.
 
 ## 11.8 Требование стабильности ID
 ID должны быть стабильными для `seed`:
@@ -139,6 +186,8 @@ Facility structure:
 
 Pressure intent:
 
+- `pressureCompartmentCount`, `interlockGroupCount`;
+- `invalidInterlockGroupCount`;
 - `pressureStatus`, `pressureViolationCodes`;
 - `airlockRoomCount`, `validAirlockRoomCount`;
 - `exteriorAirlockRoomCount`, `internalAirlockRoomCount`;

@@ -128,6 +128,10 @@ Evaluator v2 дополнительно hard-rejects:
 - invalid airlock/bulkhead physical metadata;
 - internal airlock, который не является двухсторонним transit space;
 - exterior airlock вне hull boundary.
+- unresolved exterior hatch in a fresh static topology;
+- outer hatch facing an enclosed structural void;
+- mismatched inner/outer interlock group;
+- missing airlock chamber compartment.
 
 `hullUseFit` теперь сочетает usable hull occupancy (55%) и измеренный
 archetype silhouette fit (45%). Слабая узнаваемость остаётся soft warning, а не
@@ -135,7 +139,7 @@ archetype silhouette fit (45%). Слабая узнаваемость остаё
 
 Остаются ограничения:
 
-- нет explicit exterior second hatch и authoritative pressure ingress chain;
+- нет полного bulkhead-separated compartment solve и runtime pressure states;
 - нет generated typed machinery/terrain keepout masses сверх экспорта
   enclosed negative space;
 - нет gold-set classifier узнаваемости без подписей;

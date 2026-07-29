@@ -336,7 +336,9 @@ function hasRequiredMetrics(
     metrics.hullComponentCount !== undefined &&
     metrics.structuralVoidCollisionCount !== undefined &&
     metrics.pressureStatus !== undefined &&
-    metrics.invalidPressureDoorCount !== undefined
+    metrics.invalidPressureDoorCount !== undefined &&
+    metrics.unresolvedExteriorHatchCount !== undefined &&
+    metrics.invalidInterlockGroupCount !== undefined
   )
 }
 

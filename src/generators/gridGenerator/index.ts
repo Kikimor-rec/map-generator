@@ -237,6 +237,17 @@ export {
   type PressureViolationCode,
 } from './pressureValidator'
 export {
+  buildDeckPressureTopology,
+  findExteriorHatchFace,
+  getAirlockCompartmentId,
+  getExteriorHatchId,
+  getExteriorHatchPortId,
+  getInnerPortId,
+  getInterlockGroupId,
+  getPressureCompartmentId,
+} from './pressureTopology'
+
+export {
   deriveGridCandidateSeed,
   evaluateGridCandidate,
   generateBestGridMap,

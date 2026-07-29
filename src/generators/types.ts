@@ -196,13 +196,21 @@ export interface Rect {
   height: number
 }
 
+export type PressureBoundaryRole = 'inner-hatch' | 'outer-hatch' | 'bulkhead'
+
 export interface Port {
   id: string
   x: number
   y: number
   wall: 'top' | 'bottom' | 'left' | 'right'
-  connectorId: string
+  connectorId: string | null
   doorType?: string
+  pressureRole?: PressureBoundaryRole
+  pressureBoundary?: boolean
+  interlockGroupId?: string
+  fromCompartmentId?: string
+  toCompartmentId?: string
+  exterior?: boolean
 }
 
 export interface LayoutRoom {
@@ -224,6 +232,7 @@ export interface LayoutRoom {
   circulationRole?: RoomCirculationRole
   interruptsBackbone?: boolean
   metadata?: RoomMetadata
+  pressureCompartmentId?: string
 }
 
 /**
@@ -276,6 +285,48 @@ export interface Junction {
   type: 'tee' | 'cross' | 'hub'
 }
 
+export type PressureCompartmentKind = 'exterior' | 'pressurized' | 'airlock'
+export type PressureNominalState = 'vacuum' | 'pressurized' | 'cycling' | 'unknown'
+export type ExternalEnvironment = 'vacuum' | 'unknown'
+
+export interface PressureCompartment {
+  id: string
+  label: string
+  kind: PressureCompartmentKind
+  nominalState: PressureNominalState
+  roomIds: string[]
+}
+
+export interface PressureHatch {
+  id: string
+  roomId: string
+  portId: string
+  wall: Port['wall']
+  position: Point
+  doorType: 'airlock'
+  pressureRole: 'outer-hatch'
+  pressureBoundary: true
+  interlockGroupId: string
+  fromCompartmentId: string
+  toCompartmentId: string
+}
+
+export interface PressureInterlockGroup {
+  id: string
+  chamberRoomId: string
+  innerPortIds: string[]
+  outerHatchId?: string
+}
+
+export interface DeckPressureTopology {
+  version: 1
+  outsideCompartmentId: string
+  externalEnvironment: ExternalEnvironment
+  compartments: PressureCompartment[]
+  exteriorHatches: PressureHatch[]
+  interlockGroups: PressureInterlockGroup[]
+}
+
 export interface DeckLayout {
   deckIndex: number
   gridWidth: number
@@ -283,6 +334,7 @@ export interface DeckLayout {
   rooms: LayoutRoom[]
   connectors: LayoutConnector[]
   junctions: Junction[]
+  pressure?: DeckPressureTopology
 }
 
 // ============================================================================
@@ -309,6 +361,7 @@ export interface MapJSON {
     connectors: LayoutConnector[]
     junctions: Junction[]
     geometry?: DeckGeometry
+    pressure?: DeckPressureTopology
   }>
 }
 
@@ -413,6 +466,9 @@ export interface TTRPGMetrics {
   invalidPressureDoorCount?: number
   exteriorHatchCount?: number
   unresolvedExteriorHatchCount?: number
+  pressureCompartmentCount?: number
+  interlockGroupCount?: number
+  invalidInterlockGroupCount?: number
 }
 
 export interface ValidationIssue {

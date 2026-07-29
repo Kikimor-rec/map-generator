@@ -108,7 +108,20 @@ repair engine для редактора.
 - `INVALID_AIRLOCK_DOOR_METADATA`;
 - `INVALID_BULKHEAD_DOOR_METADATA`.
 
-`EXTERIOR_HATCH_NOT_MATERIALIZED` остаётся warning и не ремонтируется
-фиктивным connector. Следующий repair slice должен разделить planning/apply,
-быть одной undoable transaction и не переносить шлюз или создавать новую ветку
-при неоднозначной геометрии.
+Static topology v1 additionally rejects:
+
+- `INVALID_EXTERIOR_HATCH_METADATA`;
+- `INVALID_AIRLOCK_INTERLOCK_GROUP`;
+- `PRESSURE_COMPARTMENT_MISSING`;
+- a materialized exterior hatch aimed at enclosed negative space;
+- a fresh exterior airlock with `unresolvedExteriorHatchCount > 0`.
+
+For legacy calls without `deck.pressure`,
+`EXTERIOR_HATCH_NOT_MATERIALIZED` remains a warning. Once the versioned
+topology block exists, the same condition is an error. Validation remains
+read-only: it reports broken topology but does not move rooms or create
+corridors.
+
+Future repair actions must still be planned and applied as one undoable
+transaction. They must not move an airlock or create a new corridor when the
+geometry is ambiguous.

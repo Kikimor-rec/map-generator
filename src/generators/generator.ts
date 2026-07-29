@@ -31,7 +31,8 @@ import type {
   CorridorAttachment,
   CorridorJunction,
   CorridorEndpointAnchor,
-  DeckGeometry
+  DeckGeometry,
+  DeckPressureTopology
 } from '@core/types'
 
 import { RoomType as RoomTypeEnum, DoorType as DoorTypeEnum, CorridorStyle as CorridorStyleEnum } from '@core/types'
@@ -420,6 +421,7 @@ export interface EditorMapData {
   doors: Door[]
   junctions?: CorridorJunction[]
   geometry?: DeckGeometry
+  pressure?: DeckPressureTopology
 }
 
 function pathToOrthogonalSegments(path: Array<{ x: number; y: number }>): CorridorSegment[] {
@@ -464,7 +466,7 @@ export function convertToEditorFormat(
 ): EditorMapData {
   const deck = mapJson.decks[deckIndex]
   if (!deck) {
-    return { rooms: [], corridors: [], doors: [], junctions: [], geometry: undefined }
+    return { rooms: [], corridors: [], doors: [], junctions: [], geometry: undefined, pressure: undefined }
   }
   
   // Merge routing options with defaults
@@ -492,6 +494,13 @@ export function convertToEditorFormat(
             isOpen: false,
             isLocked: doorType === DoorTypeEnum.Secure,
             securityLevel: doorType === DoorTypeEnum.Secure ? 3 : 0,
+            pressureRole: port.pressureRole,
+            pressureBoundary: port.pressureBoundary,
+            interlockGroupId: port.interlockGroupId,
+            fromCompartmentId: port.fromCompartmentId,
+            toCompartmentId: port.toCompartmentId,
+            exterior: port.exterior,
+            boundarySide: port.wall,
           }
         })
       : []
@@ -514,6 +523,7 @@ export function convertToEditorFormat(
         roomType: layoutRoom.roomType,
         circulationRole: layoutRoom.circulationRole ?? 'terminal',
         interruptsBackbone: layoutRoom.interruptsBackbone ?? false,
+        pressureCompartmentId: layoutRoom.pressureCompartmentId,
       },
       deckLevel: deckIndex,
       isVisible: true,
@@ -631,8 +641,11 @@ export function convertToEditorFormat(
   // The cast keeps this adapter compatible until every generator contract
   // exposes the same optional field.
   const geometry = (deck as typeof deck & { geometry?: DeckGeometry }).geometry
+  const pressure = (
+    deck as typeof deck & { pressure?: DeckPressureTopology }
+  ).pressure
 
-  return { rooms, corridors: coalescedCorridors, doors, junctions, geometry }
+  return { rooms, corridors: coalescedCorridors, doors, junctions, geometry, pressure }
 }
 
 function getZoneColor(zone: string, zones: Array<{ id: string; color: string }>): string {

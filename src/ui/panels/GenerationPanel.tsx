@@ -202,6 +202,10 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       airlockRoomCount?: number
       validAirlockRoomCount?: number
       unresolvedExteriorHatchCount?: number
+      exteriorHatchCount?: number
+      pressureCompartmentCount?: number
+      interlockGroupCount?: number
+      invalidInterlockGroupCount?: number
     }
     viewport: { x: number; y: number; zoom: number }
   } | null>(null)
@@ -398,6 +402,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               corridors: editorData.corridors,
               junctions: editorData.junctions ?? [],
               geometry: editorData.geometry,
+              pressure: editorData.pressure,
             }
 
             const newProject = {
@@ -442,6 +447,10 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 pressureViolationCodes: metaData.ttrpgMetrics?.pressureViolationCodes,
                 airlockRoomCount: metaData.ttrpgMetrics?.airlockRoomCount,
                 validAirlockRoomCount: metaData.ttrpgMetrics?.validAirlockRoomCount,
+                exteriorHatchCount: metaData.ttrpgMetrics?.exteriorHatchCount,
+                pressureCompartmentCount: metaData.ttrpgMetrics?.pressureCompartmentCount,
+                interlockGroupCount: metaData.ttrpgMetrics?.interlockGroupCount,
+                invalidInterlockGroupCount: metaData.ttrpgMetrics?.invalidInterlockGroupCount,
                 unresolvedExteriorHatchCount: metaData.ttrpgMetrics?.unresolvedExteriorHatchCount,
               },
               viewport: fitViewportForEditorData(editorData),
@@ -1253,7 +1262,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                         : 'border-amber-500/50 bg-amber-500/10 text-amber-200'
                   }`}>
                     <div className="flex items-center justify-between font-medium">
-                      <span>Pressure intent</span>
+                      <span>Airlock topology</span>
                       <span className="uppercase">{previewData.diagnostics.pressureStatus}</span>
                     </div>
                     <div className="mt-1 grid grid-cols-2 gap-x-2 text-space-300">
@@ -1261,9 +1270,14 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                         Airlocks: {previewData.diagnostics.validAirlockRoomCount ?? '?'}/{previewData.diagnostics.airlockRoomCount ?? '?'} valid
                       </span>
                       <span>
-                        Outer hatches pending: {previewData.diagnostics.unresolvedExteriorHatchCount ?? '?'}
+                        Exterior hatches: {previewData.diagnostics.exteriorHatchCount ?? '?'}
                       </span>
+                      <span>Compartments: {previewData.diagnostics.pressureCompartmentCount ?? '?'}</span>
+                      <span>Interlocks: {previewData.diagnostics.interlockGroupCount ?? '?'}</span>
                     </div>
+                    {(previewData.diagnostics.unresolvedExteriorHatchCount ?? 0) > 0 && (
+                      <div className="mt-1">Unresolved exterior hatches: {previewData.diagnostics.unresolvedExteriorHatchCount}</div>
+                    )}
                     {(previewData.diagnostics.pressureViolationCodes?.length ?? 0) > 0 && (
                       <div className="mt-1 text-space-400">
                         {previewData.diagnostics.pressureViolationCodes?.join(' / ')}
