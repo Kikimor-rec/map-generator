@@ -200,5 +200,8 @@ Pressure intent:
 
 Salt дочернего seed намеренно остаётся `"grid-candidate-v1"`: изменение
 quality evaluation не должно менять само семейство generated candidates.
-`validAirlockRoomCount` пока означает согласованную room-side геометрию; внешний
-шлюз всё ещё может иметь `unresolvedExteriorHatchCount > 0`.
+
+Для свежей static topology `validAirlockRoomCount` учитывает chamber
+compartment, общий interlock и корректный внешний люк. Selector не принимает
+кандидат с `unresolvedExteriorHatchCount > 0`. Legacy-документ без
+`deck.pressure` сохраняет прежнюю room-side проверку и warning совместимости.
