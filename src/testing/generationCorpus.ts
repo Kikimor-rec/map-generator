@@ -20,6 +20,11 @@ export interface GenerationCorpusSummary {
   pressureStatus: string
 }
 
+export interface GenerationRegressionCase extends GenerationCorpusCase {
+  regression: string
+  request: GenerationCorpusCase['request'] & Required<Pick<GeneratorOptions, 'styleProfile'>>
+}
+
 export const GENERATION_CORPUS = [
   {
     id: 'ship-courier-xs',
@@ -56,6 +61,22 @@ export const GENERATION_CORPUS = [
   },
 ] as const satisfies readonly GenerationCorpusCase[]
 
+export const GENERATION_REGRESSIONS = [
+  {
+    id: 'ship-freighter-qwhjgv9k-freeze',
+    request: {
+      seed: 'QWHJGV9K',
+      archetype: 'ship',
+      subtype: 'freighter',
+      styleProfile: 'utilitarian',
+      sizeTier: 'md',
+      loopiness: 0.5,
+      danger: 0.3,
+    },
+    regression: 'historical Ship/Freighter/MD freeze seed completes generation',
+  },
+] as const satisfies readonly GenerationRegressionCase[]
+
 export function runGenerationCorpusCase(
   fixture: GenerationCorpusCase,
 ): GenerationCorpusSummary {
@@ -71,7 +92,8 @@ export function runGenerationCorpusCase(
   }
 
   const document = JSON.parse(JSON.stringify(result.map)) as typeof result.map
-  delete document.meta.generatedAt
+  const { generatedAt: _generatedAt, ...stableMeta } = document.meta
+  const normalizedDocument = { ...document, meta: stableMeta }
 
   const metrics = document.meta.ttrpgMetrics
   const roomCount = document.decks.reduce((count, deck) => count + deck.rooms.length, 0)
@@ -80,7 +102,7 @@ export function runGenerationCorpusCase(
   return {
     caseId: fixture.id,
     requestHash: stableHash(fixture.request),
-    documentHash: stableHash(document),
+    documentHash: stableHash(normalizedDocument),
     roomCount,
     connectorCount,
     issueCodes: result.issues
