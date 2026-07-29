@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildGenerationWorkerRequest,
+  formatGallerySelectionSummary,
   getGenerationProfileOptions,
+  getGenerationProfilePresentation,
 } from '../generationPanelModel'
 
 describe('generation panel profile options', () => {
@@ -23,6 +25,37 @@ describe('generation panel profile options', () => {
       `Hard-gate selection from ${counts[1]} candidates.`,
       `Hard-gate selection from ${counts[2]} candidates.`,
     ])
+  })
+
+  it('presents Draft as fixed in gallery while retaining the single-map profile', () => {
+    const gallery = getGenerationProfilePresentation('md', 'polish', true)
+
+    expect(gallery.options.map(option => ({
+      id: option.id,
+      active: option.active,
+      disabled: option.disabled,
+    }))).toEqual([
+      { id: 'draft', active: true, disabled: true },
+      { id: 'standard', active: false, disabled: true },
+      { id: 'polish', active: false, disabled: true },
+    ])
+    expect(gallery.description).toBe(
+      'Gallery generates multiple Draft seeded variants, then ranks them.',
+    )
+
+    const singleMap = getGenerationProfilePresentation('md', 'polish', false)
+
+    expect(singleMap.options.find(option => option.active)?.id).toBe('polish')
+    expect(singleMap.options.every(option => !option.disabled)).toBe(true)
+    expect(singleMap.description).toBe(
+      'Hard-gate selection from 6 candidates.',
+    )
+  })
+
+  it('describes gallery ranking with a neutral selection score label', () => {
+    expect(formatGallerySelectionSummary(0.876, 1)).toBe(
+      'Selection score: 88% · Pareto 2',
+    )
   })
 })
 

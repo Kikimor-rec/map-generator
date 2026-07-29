@@ -25,7 +25,8 @@ import {
 import type { GenerationWorkerResponse } from '../../workers/generationProtocol'
 import {
   buildGenerationWorkerRequest,
-  getGenerationProfileOptions,
+  formatGallerySelectionSummary,
+  getGenerationProfilePresentation,
 } from './generationPanelModel'
 
 // TYPES
@@ -191,7 +192,11 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
 
   // Available subtypes
   const availableSubtypes = ARCHETYPE_CONFIGS[archetype].subtypes
-  const generationProfileOptions = getGenerationProfileOptions(sizeTier)
+  const generationProfilePresentation = getGenerationProfilePresentation(
+    sizeTier,
+    qualityProfile,
+    galleryMode,
+  )
 
   const handleArchetypeChange = useCallback((newArchetype: Archetype) => {
     setArchetype(newArchetype)
@@ -720,15 +725,17 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 <div className="space-y-1">
                   <label className="label">Selection effort</label>
                   <div className="grid grid-cols-3 gap-1">
-                    {generationProfileOptions.map(profile => (
+                    {generationProfilePresentation.options.map(profile => (
                       <button
                         key={profile.id}
                         onClick={() => setQualityProfile(profile.id)}
-                        className={`px-2 py-2 rounded text-sm font-medium border transition-all ${qualityProfile === profile.id
+                        disabled={profile.disabled}
+                        aria-pressed={profile.active}
+                        className={`px-2 py-2 rounded text-sm font-medium border transition-all disabled:cursor-not-allowed disabled:opacity-60 ${profile.active
                           ? 'bg-space-700 border-cyber-blue text-cyber-blue'
                           : 'bg-space-800 border-space-600 text-space-300 hover:border-space-500'
                         }`}
-                        title={profile.description}
+                        title={galleryMode ? generationProfilePresentation.description : profile.description}
                       >
                         <span className="block">{profile.label}</span>
                         <span className="block text-[10px] font-normal">
@@ -738,7 +745,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                     ))}
                   </div>
                   <p className="text-xs text-space-400">
-                    {generationProfileOptions.find(profile => profile.id === qualityProfile)?.description}
+                    {generationProfilePresentation.description}
                   </p>
                 </div>
 
@@ -969,7 +976,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                         {v.roomCount} rooms, {v.corridorCount} corridors
                       </div>
                       <div className="text-xs text-space-500">
-                        Quality: {`${(v.score * 100).toFixed(0)}% · Pareto ${v.paretoRank + 1}`}
+                        {formatGallerySelectionSummary(v.score, v.paretoRank)}
                       </div>
                       {v.objectives && (
                         <div className="mt-1 text-[10px] text-space-500">
