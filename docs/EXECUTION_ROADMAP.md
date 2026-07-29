@@ -46,7 +46,7 @@ explicit importer.
 ## Phase 0 — Ground truth and guardrails
 
 **Outcome:** The team can change behavior without guessing whether it regressed.
-**Status:** Complete (verified 2026-07-29).
+**Status:** Implemented locally; remote Ubuntu/Node 22 CI verification pending.
 
 Scope:
 
@@ -55,7 +55,7 @@ Scope:
 - add CI for the same command;
 - define a normalized deterministic map hash;
 - establish a small seed matrix covering ship, station, and outpost;
-- preserve known failure seeds as regression cases;
+- preserve historical failure inputs as explicitly labeled current-engine smoke cases;
 - record an ADR naming the occupancy generator as the only production engine;
 - document ownership of legacy generator, quality pipeline, and current stores.
 
@@ -71,7 +71,8 @@ Gate:
 - Local gate: `npm run check`
 - Determinism: `src/generators/__tests__/generationCorpus.test.ts`
 - Ownership: `docs/architecture/ACTIVE_GENERATOR_ADR.md`
-- CI: `.github/workflows/check.yml`
+- CI configuration: `.github/workflows/check.yml`
+- Remote CI: successful Ubuntu/Node 22 workflow run pending after branch push
 
 ## Phase 1 — One production generation path
 
@@ -323,6 +324,7 @@ conflict, this roadmap and an accepted ADR take precedence.
 
 ## Current focus
 
-**Completed:** Phase 0 — Ground truth and guardrails.
-**Next:** Phase 1 — One production generation path (not started).
+**Implemented:** Phase 0 — Ground truth and guardrails.
+**Verification pending:** Successful remote Ubuntu/Node 22 CI run.
+**Next after verification:** Phase 1 — One production generation path (not started).
 **First external testing target:** Phase 5 — Canonical Blueprint Editor.

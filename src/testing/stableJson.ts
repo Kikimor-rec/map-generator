@@ -2,7 +2,7 @@ export type JsonScalar = string | number | boolean | null
 export type JsonValue = JsonScalar | JsonValue[] | { [key: string]: JsonValue }
 
 export function stableJson(value: unknown): string {
-  return JSON.stringify(normalize(value, new WeakSet<object>()))
+  return emitJson(value, new WeakSet<object>())
 }
 
 export function stableHash(value: unknown): string {
@@ -17,16 +17,25 @@ export function stableHash(value: unknown): string {
   return (hash >>> 0).toString(16).padStart(8, '0')
 }
 
-function normalize(value: unknown, ancestors: WeakSet<object>): JsonValue {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
-    return value
+function emitJson(value: unknown, ancestors: WeakSet<object>): string {
+  if (value === null) {
+    return 'null'
   }
 
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) {
+  if (typeof value === 'string' || typeof value === 'number') {
+    if (typeof value === 'number' && !Number.isFinite(value)) {
       throw new TypeError('stableJson does not support non-finite numbers')
     }
-    return value
+
+    const encoded = JSON.stringify(value)
+    if (encoded === undefined) {
+      throw new TypeError(`stableJson does not support ${typeof value}`)
+    }
+    return encoded
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false'
   }
 
   if (typeof value === 'undefined' || typeof value === 'function' || typeof value === 'symbol' || typeof value === 'bigint') {
@@ -44,16 +53,24 @@ function normalize(value: unknown, ancestors: WeakSet<object>): JsonValue {
   ancestors.add(value)
   try {
     if (Array.isArray(value)) {
-      return value.map((item) => normalize(item, ancestors))
+      const items = Array.from(
+        { length: value.length },
+        (_, index) => index in value ? emitJson(value[index], ancestors) : 'null',
+      )
+      return `[${items.join(',')}]`
+    }
+
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new TypeError('stableJson supports only arrays and plain objects')
     }
 
     const record = value as Record<string, unknown>
-    return Object.keys(record)
+    const properties = Object.keys(record)
       .sort()
-      .reduce<{ [key: string]: JsonValue }>((result, key) => {
-        result[key] = normalize(record[key], ancestors)
-        return result
-      }, {})
+      .map(key => `${JSON.stringify(key)}:${emitJson(record[key], ancestors)}`)
+
+    return `{${properties.join(',')}}`
   } finally {
     ancestors.delete(value)
   }

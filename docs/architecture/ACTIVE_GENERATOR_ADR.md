@@ -33,21 +33,21 @@ comparison. New production behavior must not be added to them.
 
 `MapDocumentV2`, defined in `src/domain/mapDocumentV2.ts`, is the target
 canonical generated document. Current `MapJSON` and editor-shaped results are
-transitional boundary formats until Phase 1 connects production generation to
-`MapDocumentV2`.
+transitional boundary formats until Phase 2 completes and extends
+`MapDocumentV2` and adds `importGeneratedMap`.
 
 ## Current paths and ownership
 
 | Path | Current state | Ownership under this decision |
 | --- | --- | --- |
-| `src/generators/generator.ts` | Generator facade; defaults to grid but still accepts `grid` or `legacy` through `engine` and returns `MapJSON`. | Transitional production entry point. In Phase 1 it must stop production dispatch to legacy and emit or adapt to `MapDocumentV2`. |
+| `src/generators/generator.ts` | Generator facade; defaults to grid but still accepts `grid` or `legacy` through `engine` and returns `MapJSON`. | Transitional production entry point. Phase 1 stops production dispatch to legacy; Phase 2 adapts its output to `MapDocumentV2` through `importGeneratedMap`. |
 | `src/generators/gridGenerator/occupancyGenerator.ts` | Occupancy-first implementation; carved cells are the source of truth and graph/editor geometry is derived from them. | The only production generation engine target. |
 | `src/generators/gridGenerator/candidateSelector.ts` | Runs deterministic grid candidates, applies hard validation gates, and ranks passing candidates. | Production selection owned by the occupancy-grid engine, not a separate engine. |
 | `src/generators/quality/pipeline.ts` | Independently generates candidates when the quality branch is selected. | Source for validator/scoring extraction only; retire the independent generation path after extraction. |
 | `src/generators/mapGenerator.ts` | Older standalone BSP/graph `MapGenerator` API, still re-exported from the generator index. | Import/regression compatibility only. |
 | `src/ui/panels/GenerationPanel.tsx` | Exposes an independent quality-pipeline toggle. Its stale `generatorEngine` state and payload field always use `grid`; there is no engine-selection control or call to `setGeneratorEngine`. | Transitional UI. Phase 1 removes the stale engine field and production choices that bypass the occupancy-grid engine. |
 | `src/workers/generation.worker.ts` | Dispatches to the quality pipeline, best-of-N grid selection, or `generateMap`, which can still select legacy. | Transitional dispatch. Phase 1 narrows it to occupancy-grid generation plus extracted validation/scoring. |
-| `src/domain/mapDocumentV2.ts` | Defines the renderer-neutral, JSON-safe `MapDocumentV2`; the generator does not yet produce it. | Target canonical document contract. |
+| `src/domain/mapDocumentV2.ts` | Defines the renderer-neutral, JSON-safe `MapDocumentV2`; the generator does not yet produce it. | Target canonical document contract. Phase 2 owns its completion and extension plus the `importGeneratedMap` boundary. |
 
 ## Invariants
 
@@ -67,23 +67,23 @@ transitional boundary formats until Phase 1 connects production generation to
 
 ## Phase 1 migration
 
-Phase 1 will:
+Phase 1 is limited to production-path consolidation. It will:
 
 1. extract any retained validators and scoring from
    `src/generators/quality/pipeline.ts` and apply them to occupancy-grid
    candidates;
-2. connect occupancy-grid output to `MapDocumentV2`;
-3. remove the production `engine: 'grid' | 'legacy'` and independent-quality
+2. remove the production `engine: 'grid' | 'legacy'` and independent-quality
    dispatch from `src/generators/generator.ts`,
    `src/ui/panels/GenerationPanel.tsx`, and
    `src/workers/generation.worker.ts`;
-4. isolate legacy generation behind explicit import/regression compatibility
+3. isolate legacy generation behind explicit import/regression compatibility
    boundaries; and
-5. retire the remaining independent quality-generation implementation.
+4. retire the remaining independent quality-generation implementation.
 
-Production dispatch removal belongs to Phase 1. This Phase 0 ADR changes
-ownership and future direction only; it deliberately makes no runtime code
-change.
+Completion and extension of `MapDocumentV2`, including the
+`importGeneratedMap` boundary, belongs to Phase 2. Production dispatch removal
+belongs to Phase 1. This Phase 0 ADR changes ownership and future direction
+only; it deliberately makes no runtime code change.
 
 ## Consequences
 
@@ -91,8 +91,8 @@ change.
 - Quality work can be reused without preserving a parallel geometry generator.
 - Import and regression coverage can remain available while production
   ambiguity is removed.
-- Phase 1 must provide adapters during the move from current `MapJSON` and
-  editor-shaped results to `MapDocumentV2`.
+- Phase 2 must provide the import adapter during the move from current
+  `MapJSON` and editor-shaped results to `MapDocumentV2`.
 - Until Phase 1 completes, the UI and worker can still reach non-target paths;
   that is known transitional state, not authorization for two production
   engines.
