@@ -1,5 +1,6 @@
 import {
   getCandidateCount,
+  type EditorMapData,
   type Archetype,
   type GenerationQualityProfile,
   type MapSize,
@@ -7,6 +8,13 @@ import {
   type StyleProfile,
   type Subtype,
 } from '../../generators'
+import {
+  DEFAULT_LAYERS,
+  MAP_THEMES,
+  MapThemeId,
+  type MapProject,
+} from '../../core/types'
+
 import type { GenerationWorkerRequest } from '../../workers/generationProtocol'
 
 export interface GenerationProfileOption {
@@ -84,6 +92,93 @@ export function getGenerationProfilePresentation(
       : options.find(option => option.id === activeProfile)?.description ?? '',
   }
 }
+export type GalleryGenerationAttempt<T> =
+  | { status: 'success'; value: T }
+  | { status: 'failure'; reason: string }
+
+export interface GalleryFailureSummary {
+  failedCount: number
+  totalCount: number
+  allFailed: boolean
+  reasonSummary: string
+}
+
+export interface GalleryAggregation<T> {
+  successes: T[]
+  failure: GalleryFailureSummary | null
+}
+
+export function aggregateGalleryAttempts<T>(
+  attempts: readonly GalleryGenerationAttempt<T>[],
+): GalleryAggregation<T> {
+  const successes: T[] = []
+  const reasonCounts = new Map<string, number>()
+
+  for (const attempt of attempts) {
+    if (attempt.status === 'success') {
+      successes.push(attempt.value)
+      continue
+    }
+
+    const reason = attempt.reason.trim() || 'Generation failed'
+    reasonCounts.set(reason, (reasonCounts.get(reason) ?? 0) + 1)
+  }
+
+  if (reasonCounts.size === 0) return { successes, failure: null }
+
+  const reasonSummary = [...reasonCounts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([reason, count]) => `${reason} (${count})`)
+    .join('; ')
+  const failedCount = attempts.length - successes.length
+
+  return {
+    successes,
+    failure: {
+      failedCount,
+      totalCount: attempts.length,
+      allFailed: successes.length === 0,
+      reasonSummary,
+    },
+  }
+}
+
+export interface GalleryProjectInput {
+  projectId: string
+  deckId: string
+  name: string
+  description: string
+  timestamp: string
+  seed: string
+  score: number
+  editorData: EditorMapData
+}
+
+export function buildGalleryProject(input: GalleryProjectInput): MapProject {
+  return {
+    id: input.projectId,
+    name: input.name,
+    description: input.description,
+    version: '1.0.0',
+    createdAt: input.timestamp,
+    updatedAt: input.timestamp,
+    gridSize: 40,
+    decks: [{
+      id: input.deckId,
+      name: 'Deck 1',
+      level: 1,
+      rooms: input.editorData.rooms,
+      corridors: input.editorData.corridors,
+      junctions: input.editorData.junctions ?? [],
+      geometry: input.editorData.geometry,
+      pressure: input.editorData.pressure,
+    }],
+    layers: [...DEFAULT_LAYERS],
+    theme: MAP_THEMES[MapThemeId.Blueprint],
+    metadata: { seed: input.seed, score: input.score },
+  }
+}
+
 
 export function formatGallerySelectionSummary(
   score: number,

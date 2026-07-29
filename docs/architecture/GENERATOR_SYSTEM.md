@@ -71,9 +71,11 @@ pipelines.
 
 ## Candidate selection
 
-For a master seed, candidate indices are deterministic. Multi-candidate child
-seeds use the stable `"grid-candidate-v1"` salt and do not depend on pool size,
-so increasing the profile count preserves the earlier candidate family.
+For a master seed, candidate indices are deterministic. In multi-candidate
+pools, child seeds use the stable `"grid-candidate-v1"` salt and do not depend
+on pool size, so increasing one multi-candidate pool preserves its earlier
+child-seed family. A one-candidate pool is the exception: Draft uses the master
+seed directly and therefore is not candidate 0 of Standard or Polish.
 
 Candidates must pass semantic, structure, pressure, door, connector geometry,
 room-port anchor, and finite-objective gates. Passing candidates are ordered by:

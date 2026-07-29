@@ -190,6 +190,30 @@ describe('grid candidate selection', () => {
     expect(result.error).toBe('CANCELLED')
     expect(result.selection.summary.evaluatedCandidates).toBe(1)
   })
+  it('yields after the only candidate before finalizing', async () => {
+    const controller = new AbortController()
+    const abortTask = new Promise<void>(resolve => {
+      setTimeout(() => {
+        controller.abort()
+        resolve()
+      }, 0)
+    })
+
+    const resultTask = generateBestGridMapAsync({
+      seed: 'selector-single-candidate-cancel',
+      archetype: 'ship',
+      sizeTier: 'xs',
+    }, 1, {
+      signal: controller.signal,
+    })
+
+    const [result] = await Promise.all([resultTask, abortTask])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBe('CANCELLED')
+    expect(result.selection.summary.evaluatedCandidates).toBe(1)
+  })
+
 
   it('rejects fallback entry and non-finite quality metrics', () => {
     const ranked = rankGridCandidates([

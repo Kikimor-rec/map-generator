@@ -3,16 +3,27 @@ import type {
   GenerationQualityProfile,
   GeneratorOptions,
   MapJSON,
-  RoutingOptions,
   SizeTier,
   StyleProfile,
 } from '../generators'
+
+export type GenerationWorkerOptions = Pick<
+  GeneratorOptions,
+  | 'seed'
+  | 'archetype'
+  | 'subtype'
+  | 'styleProfile'
+  | 'sizeTier'
+  | 'loopiness'
+  | 'danger'
+  | 'qualityProfile'
+>
 
 export type GenerationWorkerRequest =
   | {
       type: 'GENERATE'
       requestId: string
-      options: GeneratorOptions
+      options: GenerationWorkerOptions
     }
   | {
       type: 'CANCEL'
@@ -52,17 +63,11 @@ const OPTION_KEYS = new Set([
   'sizeTier',
   'loopiness',
   'danger',
-  'skipValidation',
-  'routing',
   'qualityProfile',
 ])
-const ROUTING_KEYS = new Set([
-  'coalesceEnabled',
-  'bendPenalty',
-  'reuseBonus',
-  'crossingPenalty',
+const UNSUPPORTED_OPTION_KEYS = new Set([
+  'useQuality', 'qualityMode', 'engine', 'skipValidation', 'routing',
 ])
-const OBSOLETE_OPTION_KEYS = new Set(['useQuality', 'qualityMode', 'engine'])
 
 export class GenerationProtocolError extends Error {
   readonly requestId: string | undefined
@@ -107,20 +112,20 @@ export function getGenerationRequestId(value: unknown): string | undefined {
     : undefined
 }
 
-function parseGeneratorOptions(value: unknown, requestId: string): GeneratorOptions {
+function parseGeneratorOptions(value: unknown, requestId: string): GenerationWorkerOptions {
   const input = requireRecord(value, 'GENERATE options', requestId)
 
   for (const key of Object.keys(input)) {
-    if (OBSOLETE_OPTION_KEYS.has(key)) {
+    if (UNSUPPORTED_OPTION_KEYS.has(key)) {
       throw new GenerationProtocolError(
-        `Obsolete generation option "${key}" is not supported`,
+        `Production generation option "${key}" is not supported`,
         requestId,
       )
     }
   }
   assertOnlyKeys(input, OPTION_KEYS, 'GENERATE options', requestId)
 
-  const options: GeneratorOptions = {}
+  const options: GenerationWorkerOptions = {}
   if (input.seed !== undefined) {
     options.seed = requireString(input.seed, 'options.seed', requestId)
   }
@@ -150,56 +155,10 @@ function parseGeneratorOptions(value: unknown, requestId: string): GeneratorOpti
       requestId,
     )
   }
-  if (input.skipValidation !== undefined) {
-    options.skipValidation = requireBoolean(
-      input.skipValidation,
-      'options.skipValidation',
-      requestId,
-    )
-  }
-  if (input.routing !== undefined) {
-    options.routing = parseRoutingOptions(input.routing, requestId)
-  }
   if (input.qualityProfile !== undefined) {
     options.qualityProfile = parseQualityProfile(input.qualityProfile, requestId)
   }
   return options
-}
-
-function parseRoutingOptions(value: unknown, requestId: string): RoutingOptions {
-  const input = requireRecord(value, 'options.routing', requestId)
-  assertOnlyKeys(input, ROUTING_KEYS, 'options.routing', requestId)
-
-  const routing: RoutingOptions = {}
-  if (input.coalesceEnabled !== undefined) {
-    routing.coalesceEnabled = requireBoolean(
-      input.coalesceEnabled,
-      'options.routing.coalesceEnabled',
-      requestId,
-    )
-  }
-  if (input.bendPenalty !== undefined) {
-    routing.bendPenalty = requireFiniteNumber(
-      input.bendPenalty,
-      'options.routing.bendPenalty',
-      requestId,
-    )
-  }
-  if (input.reuseBonus !== undefined) {
-    routing.reuseBonus = requireFiniteNumber(
-      input.reuseBonus,
-      'options.routing.reuseBonus',
-      requestId,
-    )
-  }
-  if (input.crossingPenalty !== undefined) {
-    routing.crossingPenalty = requireFiniteNumber(
-      input.crossingPenalty,
-      'options.routing.crossingPenalty',
-      requestId,
-    )
-  }
-  return routing
 }
 
 function parseArchetype(value: unknown, requestId: string): Archetype {
@@ -295,15 +254,6 @@ function requireFiniteNumber(
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw invalidValue(label, requestId)
   }
-  return value
-}
-
-function requireBoolean(
-  value: unknown,
-  label: string,
-  requestId: string,
-): boolean {
-  if (typeof value !== 'boolean') throw invalidValue(label, requestId)
   return value
 }
 

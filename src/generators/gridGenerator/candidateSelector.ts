@@ -223,9 +223,7 @@ export async function generateBestGridMapAsync(
     }
     attempts.push(generateAttempt(options, masterSeed, safeCount, index))
     hooks.onCandidate?.(index + 1, safeCount)
-    if (index < safeCount - 1) {
-      await yieldToEventLoop()
-    }
+    await yieldToEventLoop()
   }
 
   if (hooks.signal?.aborted) {

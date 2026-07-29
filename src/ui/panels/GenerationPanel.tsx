@@ -24,6 +24,10 @@ import {
 } from '@generators/index'
 import type { GenerationWorkerResponse } from '../../workers/generationProtocol'
 import {
+  aggregateGalleryAttempts,
+  buildGalleryProject,
+  type GalleryFailureSummary,
+  type GalleryGenerationAttempt,
   buildGenerationWorkerRequest,
   formatGallerySelectionSummary,
   getGenerationProfilePresentation,
@@ -42,6 +46,18 @@ interface GenerationState {
   error: string | null
   progress: number
 }
+interface GalleryVariant {
+  candidateIndex: number
+  seed: string
+  score: number
+  paretoRank: number
+  objectives?: CandidateSelectionObjectives
+  roomCount: number
+  corridorCount: number
+  map: MapJSON
+  data: ReturnType<typeof convertToEditorFormat>
+}
+
 
 // CONSTANTS
 const SIZE_TIERS: Array<{ value: SizeTier; label: string; description: string }> = [
@@ -111,19 +127,9 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   // Gallery mode - generate multiple variants
   const [galleryMode, setGalleryMode] = useState(false)
   const [variantCount, setVariantCount] = useState(4)
-  const [variants, setVariants] = useState<Array<{
-    candidateIndex: number
-    seed: string
-    score: number
-    hardPass: boolean
-    paretoRank: number
-    hardIssues: string[]
-    objectives?: CandidateSelectionObjectives
-    roomCount: number
-    corridorCount: number
-    map: MapJSON
-    data: ReturnType<typeof convertToEditorFormat> | null
-  }>>([])
+  const [variants, setVariants] = useState<GalleryVariant[]>([])
+  const [galleryFailure, setGalleryFailure] =
+    useState<GalleryFailureSummary | null>(null)
   const [selectedVariant, setSelectedVariant] = useState<number | null>(null)
 
   // Generation state
@@ -468,9 +474,10 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     setVariants([])
     setSelectedVariant(null)
     setPreviewData(null)
+    setGalleryFailure(null)
     setGenState(s => ({ ...s, isGenerating: true, error: null, progress: 0 }))
 
-    const newVariants: typeof variants = []
+    const attempts: GalleryGenerationAttempt<GalleryVariant>[] = []
     const masterSeed = seed.trim() || generateRandomSeed()
 
     // Use setTimeout to yield to UI thread between generations.
@@ -500,20 +507,25 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
             const roomCount = editorData.rooms.length
             const corridorCount = editorData.corridors.length
 
-            newVariants.push({
-              candidateIndex: index,
-              seed: variantSeed,
-              score: 0,
-              hardPass: true,
-              paretoRank: 0,
-              hardIssues: [],
-              roomCount,
-              corridorCount,
-              map: result.map,
-              data: editorData,
+            attempts.push({
+              status: 'success',
+              value: {
+                candidateIndex: index,
+                seed: variantSeed,
+                score: 0,
+                paretoRank: 0,
+                roomCount,
+                corridorCount,
+                map: result.map,
+                data: editorData,
+              },
             })
-          } catch (err: any) {
-            console.warn(`Variant ${index + 1} failed:`, err.message)
+          } catch (error: unknown) {
+            const reason = error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : 'Generation failed'
+            attempts.push({ status: 'failure', reason })
+            console.warn(`Variant ${index + 1} failed:`, reason)
           }
 
           setGenState(s => ({ ...s, progress: ((index + 1) / variantCount) * 100 }))
@@ -526,20 +538,37 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       await generateVariant(index)
     }
 
-    const evaluations = rankGridCandidates(newVariants.map(variant => ({
+    const galleryResult = aggregateGalleryAttempts(attempts)
+    setGalleryFailure(galleryResult.failure)
+    const failure = galleryResult.failure
+    const successfulVariants = galleryResult.successes
+
+    if (failure?.allFailed) {
+      setGenState(s => ({
+        ...s,
+        isGenerating: false,
+        progress: 100,
+        error: `All ${failure.totalCount} gallery variants failed: ${failure.reasonSummary}`,
+      }))
+      return
+    }
+
+    const evaluations = rankGridCandidates(successfulVariants.map(variant => ({
       index: variant.candidateIndex,
       seed: variant.seed,
       map: variant.map,
     })), { archetype, sizeTier, loopiness })
-    const variantsByIndex = new Map(newVariants.map(variant => [variant.candidateIndex, variant]))
-    const rankedVariants = evaluations.map(evaluation => ({
-      ...variantsByIndex.get(evaluation.index)!,
-      score: evaluation.balancedScore,
-      hardPass: evaluation.hardPass,
-      paretoRank: evaluation.paretoRank,
-      hardIssues: evaluation.hardIssues,
-      objectives: evaluation.objectives,
-    }))
+    const variantsByIndex = new Map(
+      successfulVariants.map(variant => [variant.candidateIndex, variant]),
+    )
+    const rankedVariants = evaluations
+      .filter(evaluation => evaluation.hardPass)
+      .map(evaluation => ({
+        ...variantsByIndex.get(evaluation.index)!,
+        score: evaluation.balancedScore,
+        paretoRank: evaluation.paretoRank,
+        objectives: evaluation.objectives,
+      }))
 
     setVariants(rankedVariants)
     setGenState(s => ({ ...s, isGenerating: false, progress: 100 }))
@@ -548,34 +577,21 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   // Apply selected variant
   const handleApplyVariant = useCallback((index: number) => {
     const variant = variants[index]
-    if (!variant?.data || !variant.hardPass) return
+    if (!variant) return
 
     const config = ARCHETYPE_CONFIGS[archetype]
     const name = `${config.label} (${variant.seed})`
 
-    const newDeck = {
-      id: crypto.randomUUID(),
-      name: 'Deck 1',
-      level: 1,
-      rooms: variant.data.rooms,
-      corridors: variant.data.corridors,
-      junctions: variant.data.junctions ?? [],
-      geometry: variant.data.geometry,
-    }
-
-    const newProject = {
-      id: crypto.randomUUID(),
+    const newProject = buildGalleryProject({
+      projectId: crypto.randomUUID(),
+      deckId: crypto.randomUUID(),
       name,
       description: `Generated ${archetype} - Variant ${index + 1}`,
-      version: '1.0.0',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      gridSize: 40,
-      decks: [newDeck],
-      layers: [...DEFAULT_LAYERS],
-      theme: MAP_THEMES[MapThemeId.Blueprint],
-      metadata: { seed: variant.seed, score: variant.score },
-    }
+      timestamp: new Date().toISOString(),
+      seed: variant.seed,
+      score: variant.score,
+      editorData: variant.data,
+    })
 
     dispatch(actions.loadProject(newProject))
     dispatch(actions.setViewport(fitViewportForEditorData(variant.data)))
@@ -946,11 +962,16 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   </h3>
                   <span className="text-xs text-space-400">Click to select, double-click to apply</span>
                 </div>
+                {galleryFailure && !galleryFailure.allFailed && (
+                  <div className="rounded border border-amber-500/50 bg-amber-500/10 p-2 text-xs text-amber-200">
+                    {galleryFailure.failedCount} of {galleryFailure.totalCount} variants failed: {galleryFailure.reasonSummary}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
                   {variants.map((v, i) => (
                     <div
                       key={v.seed}
-                      onClick={() => v.hardPass && setSelectedVariant(i)}
+                      onClick={() => setSelectedVariant(i)}
                       onDoubleClick={() => handleApplyVariant(i)}
                       className={`p-3 rounded border cursor-pointer transition-all ${
                         selectedVariant === i
@@ -960,15 +981,9 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                     >
                       <div className="flex justify-between items-start mb-1">
                         <span className="text-xs font-mono text-cyber-blue">{v.seed}</span>
-                        {v.hardPass ? (
-                          i === 0 && (
-                            <span className="text-[10px] bg-cyber-green/20 text-cyber-green px-1 rounded">
-                              Best valid
-                            </span>
-                          )
-                        ) : (
-                          <span className="text-[10px] bg-red-500/20 text-red-300 px-1 rounded">
-                            Rejected
+                        {i === 0 && (
+                          <span className="text-[10px] bg-cyber-green/20 text-cyber-green px-1 rounded">
+                            Best
                           </span>
                         )}
                       </div>
@@ -983,15 +998,10 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                           Route {(v.objectives.routeClarity * 100).toFixed(0)} · Hull {(v.objectives.hullUseFit * 100).toFixed(0)} · TTRPG {(v.objectives.ttrpgChoice * 100).toFixed(0)}
                         </div>
                       )}
-                      {!v.hardPass && (
-                        <div className="mt-1 text-[10px] text-red-300">
-                          {v.hardIssues.join(' · ')}
-                        </div>
-                      )}
                     </div>
                   ))}
                 </div>
-                {selectedVariant !== null && variants[selectedVariant]?.hardPass && (
+                {selectedVariant !== null && variants[selectedVariant] && (
                   <button
                     onClick={() => handleApplyVariant(selectedVariant)}
                     className="w-full btn btn-cyber"

@@ -105,7 +105,7 @@ profile-specific pool occupancy candidates. `quality/pipeline.ts` не учас�
 - room-port anchors ссылаются на существующий port с совпадающей позицией;
 - все objective values являются конечными числами.
 
-Если ни один вариант не прошёл hard gates, стандартная генерация возвращает `NO_VALID_CANDIDATE` со стабильными reason codes. Галерея показывает rejected-варианты, но не позволяет применить их как лучший результат.
+If no candidate passes the hard gates, standard generation returns `NO_VALID_CANDIDATE` with stable reason codes. Gallery mode does not expose rejected maps; it retains the failed Draft seed count and reason summary, and shows an explicit error when all variants fail.
 
 ### Pareto objectives
 
@@ -119,9 +119,9 @@ profile-specific pool occupancy candidates. `quality/pipeline.ts` не учас�
 
 ### Seed и metadata contract
 
-Child seed вычисляется как `hash(masterSeed, "grid-candidate-v1", candidateIndex)` и не зависит от размера пула. Увеличение `N` сохраняет первые `K` вариантов. `meta.seed` содержит точный selected child seed, а `meta.candidateSelection` — versioned summary с master seed, индексом, числом проверенных/прошедших кандидатов, Pareto rank, objectives и reason codes.
+In multi-candidate pools, child seeds use `hash(masterSeed, "grid-candidate-v1", candidateIndex)` and do not depend on pool size, so increasing one multi-candidate pool preserves its first `K` child seeds. A one-candidate pool is the exception: Draft uses the master seed directly and is not candidate 0 of Standard or Polish. `meta.seed` contains the exact selected seed, while `meta.candidateSelection` stores the versioned summary, master seed, index, evaluated/passed counts, Pareto rank, objectives, and reason codes.
 
-Worker делает yield между кандидатами и проверяет `AbortSignal`, поэтому Cancel останавливает перебор до следующего варианта и не отправляет `COMPLETE`.
+Worker yields after every completed candidate, including the final or only candidate, and then re-checks `AbortSignal`; therefore Cancel can stop Draft before finalization and no `COMPLETE` is sent.
 
 ### Дополнительные structural/pressure gates
 

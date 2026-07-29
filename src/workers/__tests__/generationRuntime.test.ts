@@ -178,19 +178,60 @@ describe('typed generation runtime', () => {
       type: 'COMPLETE',
     }))
   })
+  it('lets a queued Draft CANCEL win after its only production candidate', async () => {
+    const responses: GenerationWorkerResponse[] = []
+    const runtime = createGenerationRuntime(responses.push.bind(responses))
+    const cancelTask = new Promise<void>(resolve => {
+      setTimeout(() => {
+        void runtime.handleRequest({
+          type: 'CANCEL',
+          requestId: 'draft-transport-cancel',
+        }).then(resolve)
+      }, 0)
+    })
 
-  it.each(['useQuality', 'qualityMode', 'engine'] as const)(
-    'rejects obsolete %s payloads before generation dispatch',
-    (obsoleteKey) => {
+    const generationTask = runtime.handleRequest({
+      type: 'GENERATE',
+      requestId: 'draft-transport-cancel',
+      options: {
+        seed: 'QWHJGV9K',
+        archetype: 'ship',
+        subtype: 'freighter',
+        styleProfile: 'utilitarian',
+        sizeTier: 'md',
+        loopiness: 0.5,
+        danger: 0.3,
+        qualityProfile: 'draft',
+      },
+    })
+
+    await Promise.all([generationTask, cancelTask])
+
+    expect(responses).toContainEqual({
+      type: 'CANCELLED',
+      requestId: 'draft-transport-cancel',
+    })
+    expect(responses).not.toContainEqual(expect.objectContaining({
+      requestId: 'draft-transport-cancel',
+      type: 'COMPLETE',
+    }))
+  })
+
+
+  it.each(['useQuality', 'qualityMode', 'engine', 'skipValidation', 'routing'] as const)(
+    'rejects unsupported %s payloads before generation dispatch',
+    (unsupportedKey) => {
       const responses: GenerationWorkerResponse[] = []
       const generate = vi.fn<GenerateMapAsync>().mockResolvedValue(SUCCESS)
       const runtime = createGenerationRuntime(responses.push.bind(responses), generate)
       const value = {
         type: 'GENERATE',
-        requestId: `obsolete-${obsoleteKey}`,
+        requestId: `unsupported-${unsupportedKey}`,
         options: {
-          seed: 'obsolete',
-          [obsoleteKey]: obsoleteKey === 'engine' ? 'legacy' : true,
+          seed: 'unsupported',
+          [unsupportedKey]: unsupportedKey === 'engine'
+            ? 'legacy'
+            : unsupportedKey === 'routing' ? { coalesceEnabled: false } : true,
         },
       }
 

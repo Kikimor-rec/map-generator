@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  aggregateGalleryAttempts,
+  buildGalleryProject,
   buildGenerationWorkerRequest,
   formatGallerySelectionSummary,
   getGenerationProfileOptions,
@@ -58,6 +60,86 @@ describe('generation panel profile options', () => {
     )
   })
 })
+describe('gallery result model', () => {
+  it('keeps successful variants and summarizes partial failures by reason', () => {
+    const first = { seed: 'gallery-ok-1' }
+    const second = { seed: 'gallery-ok-2' }
+
+    const result = aggregateGalleryAttempts([
+      { status: 'failure', reason: 'Pressure hard gate' },
+      { status: 'success', value: first },
+      { status: 'failure', reason: 'No valid candidate' },
+      { status: 'failure', reason: 'Pressure hard gate' },
+      { status: 'success', value: second },
+    ])
+
+    expect(result.successes).toEqual([first, second])
+    expect(result.failure).toEqual({
+      failedCount: 3,
+      totalCount: 5,
+      allFailed: false,
+      reasonSummary: 'No valid candidate (1); Pressure hard gate (2)',
+    })
+  })
+
+  it('reports an all-failed gallery without exposing rejected values', () => {
+    const result = aggregateGalleryAttempts([
+      { status: 'failure', reason: 'No valid candidate' },
+      { status: 'failure', reason: 'No valid candidate' },
+      { status: 'failure', reason: 'Pressure hard gate' },
+    ])
+
+    expect(result.successes).toEqual([])
+    expect(result.failure).toEqual({
+      failedCount: 3,
+      totalCount: 3,
+      allFailed: true,
+      reasonSummary: 'No valid candidate (2); Pressure hard gate (1)',
+    })
+  })
+
+  it('preserves generated geometry and pressure in a gallery project', () => {
+    const geometry = {
+      unitsPerCell: 40,
+      facilityEnvelope: { polygons: [] },
+      structuralVoids: [],
+    }
+    const pressure = {
+      version: 1 as const,
+      outsideCompartmentId: 'pressure:vacuum',
+      externalEnvironment: 'vacuum' as const,
+      compartments: [],
+      exteriorHatches: [],
+      interlockGroups: [],
+    }
+
+    const project = buildGalleryProject({
+      projectId: 'gallery-project',
+      deckId: 'gallery-deck',
+      name: 'Gallery ship',
+      description: 'Generated ship - Variant 2',
+      timestamp: '2026-07-30T00:00:00.000Z',
+      seed: 'gallery-pressure',
+      score: 0.75,
+      editorData: {
+        rooms: [],
+        corridors: [],
+        doors: [],
+        junctions: [],
+        geometry,
+        pressure,
+      },
+    })
+
+    expect(project.decks).toHaveLength(1)
+    expect(project.decks[0]).toMatchObject({
+      id: 'gallery-deck',
+      geometry,
+      pressure,
+    })
+  })
+})
+
 
 describe('generation panel worker request', () => {
   it('builds the strict single-map worker request without legacy transport fields', () => {
