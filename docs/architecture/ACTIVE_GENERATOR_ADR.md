@@ -7,8 +7,10 @@
 
 The repository currently exposes more than one generation path. The public
 generator facade accepts `engine: 'grid' | 'legacy'`, the generation UI exposes
-that choice plus a separate quality-pipeline toggle, and the worker dispatches
-among those paths. Grid is already the default, but default selection alone
+an independent quality-pipeline toggle but no engine-selection control. Its
+stale `generatorEngine` state is initialized to `grid` and always sends grid in
+the payload because `setGeneratorEngine` is never called. The worker and public
+facade still accept legacy dispatch. Grid is already the default, but default selection alone
 does not establish architectural ownership.
 
 This ADR defines the target ownership contract for production development. It
@@ -38,12 +40,12 @@ transitional boundary formats until Phase 1 connects production generation to
 
 | Path | Current state | Ownership under this decision |
 | --- | --- | --- |
-| `src/generators/generator.ts` | Generator facade; defaults to grid but still dispatches `engine: 'grid' | 'legacy'` and returns `MapJSON`. | Transitional production entry point. In Phase 1 it must stop production dispatch to legacy and emit or adapt to `MapDocumentV2`. |
+| `src/generators/generator.ts` | Generator facade; defaults to grid but still accepts `grid` or `legacy` through `engine` and returns `MapJSON`. | Transitional production entry point. In Phase 1 it must stop production dispatch to legacy and emit or adapt to `MapDocumentV2`. |
 | `src/generators/gridGenerator/occupancyGenerator.ts` | Occupancy-first implementation; carved cells are the source of truth and graph/editor geometry is derived from them. | The only production generation engine target. |
 | `src/generators/gridGenerator/candidateSelector.ts` | Runs deterministic grid candidates, applies hard validation gates, and ranks passing candidates. | Production selection owned by the occupancy-grid engine, not a separate engine. |
 | `src/generators/quality/pipeline.ts` | Independently generates candidates when the quality branch is selected. | Source for validator/scoring extraction only; retire the independent generation path after extraction. |
 | `src/generators/mapGenerator.ts` | Older standalone BSP/graph `MapGenerator` API, still re-exported from the generator index. | Import/regression compatibility only. |
-| `src/ui/panels/GenerationPanel.tsx` | Exposes `grid`/`legacy` engine selection and an independent quality-pipeline toggle; grid is the default. | Transitional UI. Phase 1 removes production choices that bypass the occupancy-grid engine. |
+| `src/ui/panels/GenerationPanel.tsx` | Exposes an independent quality-pipeline toggle. Its stale `generatorEngine` state and payload field always use `grid`; there is no engine-selection control or call to `setGeneratorEngine`. | Transitional UI. Phase 1 removes the stale engine field and production choices that bypass the occupancy-grid engine. |
 | `src/workers/generation.worker.ts` | Dispatches to the quality pipeline, best-of-N grid selection, or `generateMap`, which can still select legacy. | Transitional dispatch. Phase 1 narrows it to occupancy-grid generation plus extracted validation/scoring. |
 | `src/domain/mapDocumentV2.ts` | Defines the renderer-neutral, JSON-safe `MapDocumentV2`; the generator does not yet produce it. | Target canonical document contract. |
 
