@@ -223,6 +223,14 @@ function analyzeAestheticMetrics(
       doorMetadataMismatchCount++
     }
   }
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      const type = getTile(canvas, x, y)?.type
+      if ((type === TileType.DOOR || type === TileType.AIRLOCK) && !expectedDoors.has(pointKey({ x, y }))) {
+        doorMetadataMismatchCount++
+      }
+    }
+  }
 
   return {
     hullFootprintTileCount,

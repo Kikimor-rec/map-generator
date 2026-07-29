@@ -321,6 +321,29 @@ export interface MapMeta {
   generatedAt: string
   ttrpgMetrics: TTRPGMetrics
   tags: string[]
+  candidateSelection?: CandidateSelectionSummary
+}
+
+export interface CandidateSelectionObjectives {
+  routeClarity: number
+  hullUseFit: number
+  ttrpgChoice: number
+}
+
+export interface CandidateSelectionSummary {
+  schemaVersion: 1
+  evaluatorVersion: 'grid-candidate-v1'
+  masterSeed: string
+  requestedCandidates: number
+  evaluatedCandidates: number
+  passedCandidates: number
+  rejectedCandidates: number
+  selectedSeed: string
+  selectedIndex: number
+  paretoRank: number
+  balancedScore: number
+  objectives: CandidateSelectionObjectives
+  reasonCodes: string[]
 }
 
 export interface GridSettings {
@@ -354,6 +377,8 @@ export interface TTRPGMetrics {
   criticalReachability?: number
   reachableRoomPairPercent?: number
   alternateRoutePairPercent?: number
+  alternateRoutePairCandidateCount?: number
+  entryBasis?: 'provided' | 'inferred' | 'fallback-first-room' | 'none'
   circulationCycleRank?: number
   averageRoomRouteDistance?: number | null
   longestRoomRouteDistance?: number | null

@@ -23,7 +23,9 @@ export type {
   Archetype,
   Subtype,
   SizeTier,
-  StyleProfile
+  StyleProfile,
+  CandidateSelectionObjectives,
+  CandidateSelectionSummary
 } from './types'
 
 // Configuration
@@ -33,6 +35,21 @@ export type { RoomTypeConfig, CountRule } from './types'
 
 // Utilities
 export { createRNG, generateStableId } from './rng'
+
+// Grid candidate quality selection
+export {
+  deriveGridCandidateSeed,
+  evaluateGridCandidate,
+  generateBestGridMap,
+  generateBestGridMapAsync,
+  getDefaultGridCandidateCount,
+  rankGridCandidates,
+} from './gridGenerator'
+export type {
+  GridCandidateEvaluation,
+  GridCandidateHardIssue,
+  GridCandidateInput,
+} from './gridGenerator'
 
 // Sub-generators (for advanced usage)
 export { generateRoomProgram, validateRoomProgram } from './roomProgram'

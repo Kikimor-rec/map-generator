@@ -267,7 +267,9 @@ describe('generateGridMap', () => {
       const maxPathPoints = Math.max(...connectors.map(connector => connector.path.length))
       const averagePathPoints = connectors.reduce((sum, connector) => sum + connector.path.length, 0) / connectors.length
 
-      expect(maxPathPoints).toBeLessThanOrEqual(4)
+      // A wall-aligned room port may add one short orthogonal endpoint elbow
+      // while the connector still represents one physical graph edge.
+      expect(maxPathPoints).toBeLessThanOrEqual(5)
       expect(averagePathPoints).toBeLessThanOrEqual(3)
     })
 

@@ -161,6 +161,29 @@ describe('validateMapAesthetics', () => {
     expect(report.violations.map(issue => issue.code)).toContain('DOOR_METADATA_MISMATCH')
   })
 
+  it('rejects a physical door tile missing from room metadata', () => {
+    const canvas = createCanvasCustom(5, 3, 'ship', 'xs')
+    fillHull(canvas)
+    tile(canvas, { x: 1, y: 1 }, TileType.FLOOR, 'room')
+    tile(canvas, { x: 2, y: 1 }, TileType.DOOR, 'room')
+    tile(canvas, { x: 3, y: 1 }, TileType.CORRIDOR)
+
+    const report = validateMapAesthetics(
+      canvas,
+      [placement('room', { x: 1, y: 1 })],
+      {
+        thresholds: {
+          hullUtilizationPercentMin: 0,
+          corridorTurnRatioMax: 1,
+        },
+      }
+    )
+
+    expect(report.status).toBe('error')
+    expect(report.metrics.doorMetadataMismatchCount).toBe(1)
+    expect(report.violations.map(issue => issue.code)).toContain('DOOR_METADATA_MISMATCH')
+  })
+
   it('exports the automatic visual review into active grid metadata', () => {
     const result = generateGridMap({
       seed: 'aesthetic-metadata',

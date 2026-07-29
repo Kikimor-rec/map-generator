@@ -42,7 +42,7 @@ import { generateTopology, validateTopology } from './topology'
 import { generateLayout, validateLayout } from './layout'
 import { coalesceCorridors } from '@core/corridorCoalesce'
 import { DEFAULT_COALESCE_SETTINGS, type CoalesceSettings, type RoutingCostConfig, DEFAULT_ROUTING_COSTS } from '@core/corridorTypes'
-import { generateGridMap } from './gridGenerator'
+import { generateBestGridMap, generateGridMap } from './gridGenerator'
 
 // ============================================================================
 // GENERATOR OPTIONS
@@ -80,6 +80,8 @@ export interface GeneratorOptions {
   routing?: RoutingOptions
   /** Generation engine: 'legacy' (skeleton-first) or 'grid' (tile-based) */
   engine?: 'legacy' | 'grid'
+  /** Deterministic grid variants to evaluate before selecting a result */
+  gridCandidateCount?: number
 }
 
 // ============================================================================
@@ -102,6 +104,7 @@ const DEFAULT_OPTIONS: Required<GeneratorOptions> = {
     crossingPenalty: DEFAULT_ROUTING_COSTS.crossingPenalty,
   },
   engine: 'grid', // New default: use grid-based generator
+  gridCandidateCount: 1,
 }
 
 // ============================================================================
@@ -823,7 +826,7 @@ export function mapRoomTypeId(roomType: string): RoomType {
  * Generate map using the new grid-based engine
  */
 function generateMapWithGridEngine(options: GeneratorOptions): GenerationResult {
-  const result = generateGridMap({
+  const gridOptions = {
     seed: options.seed,
     archetype: options.archetype,
     subtype: options.subtype,
@@ -832,7 +835,10 @@ function generateMapWithGridEngine(options: GeneratorOptions): GenerationResult 
     loopiness: options.loopiness,
     danger: options.danger,
     debug: false,
-  })
+  }
+  const result = (options.gridCandidateCount ?? DEFAULT_OPTIONS.gridCandidateCount) > 1
+    ? generateBestGridMap(gridOptions, options.gridCandidateCount)
+    : generateGridMap(gridOptions)
 
   if (!result.success || !result.map) {
     return {

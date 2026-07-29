@@ -10,12 +10,17 @@ import { DEFAULT_COALESCE_SETTINGS, DEFAULT_ROUTING_COSTS } from '@core/corridor
 import {
   generateMap,
   convertToEditorFormat,
+  deriveGridCandidateSeed,
+  rankGridCandidates,
   ARCHETYPE_CONFIGS,
   type GeneratorOptions,
   type Archetype,
   type Subtype,
   type SizeTier,
   type StyleProfile,
+  type MapJSON,
+  type CandidateSelectionObjectives,
+  type CandidateSelectionSummary,
 } from '@generators/index'
 import {
   runQualityPipeline,
@@ -125,10 +130,16 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   const [galleryMode, setGalleryMode] = useState(false)
   const [variantCount, setVariantCount] = useState(4)
   const [variants, setVariants] = useState<Array<{
+    candidateIndex: number
     seed: string
     score: number
+    hardPass: boolean
+    paretoRank: number
+    hardIssues: string[]
+    objectives?: CandidateSelectionObjectives
     roomCount: number
     corridorCount: number
+    map: MapJSON
     data: ReturnType<typeof convertToEditorFormat> | null
   }>>([])
   const [selectedVariant, setSelectedVariant] = useState<number | null>(null)
@@ -180,6 +191,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       clusteredJunctionPairs?: number
       ambiguousDoorCount?: number
       doorMetadataMismatchCount?: number
+      candidateSelection?: CandidateSelectionSummary
     }
     viewport: { x: number; y: number; zoom: number }
   } | null>(null)
@@ -359,8 +371,11 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               description = `${mapData.meta.archetype} - ${mapData.meta.subtype}`;
               metaData = {
                 generator: 'procedural',
-                seed: useSeed,
+                seed: mapData.meta.seed,
+                masterSeed: mapData.meta.candidateSelection?.masterSeed ?? useSeed,
                 archetype, subtype,
+                candidatesEvaluated: mapData.meta.candidateSelection?.evaluatedCandidates ?? 1,
+                candidateSelection: mapData.meta.candidateSelection,
                 ttrpgMetrics: mapData.meta.ttrpgMetrics
               };
             }
@@ -392,7 +407,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
             // Preview mode: show result before applying
             setPreviewData({
               project: newProject,
-              seed: useSeed,
+              seed: metaData.seed,
               roomCount: editorData.rooms.length,
               corridorCount: editorData.corridors.length,
               diagnostics: {
@@ -407,6 +422,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 clusteredJunctionPairs: metaData.ttrpgMetrics?.clusteredJunctionPairs,
                 ambiguousDoorCount: metaData.ttrpgMetrics?.ambiguousDoorCount,
                 doorMetadataMismatchCount: metaData.ttrpgMetrics?.doorMetadataMismatchCount,
+                candidateSelection: metaData.candidateSelection,
               },
               viewport: fitViewportForEditorData(editorData),
             })
@@ -473,22 +489,24 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     setGenState(s => ({ ...s, isGenerating: false, error: 'Cancelled' }));
   }, []);
 
-  // Generate multiple variants for gallery
+  // Generate multiple raw variants, then rank them with the same evaluator as standard generation.
   const handleGenerateGallery = useCallback(async () => {
     setVariants([])
     setSelectedVariant(null)
+    setPreviewData(null)
     setGenState(s => ({ ...s, isGenerating: true, error: null, progress: 0 }))
 
     const routingOptions = { coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty }
     const newVariants: typeof variants = []
+    const masterSeed = seed.trim() || generateRandomSeed()
 
-    // Use setTimeout to yield to UI thread between generations
+    // Use setTimeout to yield to UI thread between generations.
     const generateVariant = (index: number): Promise<void> => {
       return new Promise((resolve) => {
         setTimeout(() => {
-          const variantSeed = seed.trim() 
-            ? `${seed}-${index + 1}` 
-            : Math.random().toString(36).substring(2, 10).toUpperCase()
+          const variantSeed = generatorEngine === 'grid'
+            ? deriveGridCandidateSeed(masterSeed, index)
+            : `${masterSeed}-${index + 1}`
 
           try {
             const options: GeneratorOptions = {
@@ -500,53 +518,75 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               loopiness,
               danger,
               engine: generatorEngine,
+              gridCandidateCount: 1,
               routing: routingOptions,
             }
-            
+
             const result = generateMap(options)
             if (!result.success || !result.map) {
-              throw new Error(result.issues.map(i => i.message).join(', ') || 'Generation failed')
+              throw new Error(result.issues.map(issue => issue.message).join(', ') || 'Generation failed')
             }
-            
+
             const editorData = convertToEditorFormat(result.map, 0, routingOptions)
-            
             const roomCount = editorData.rooms.length
             const corridorCount = editorData.corridors.length
             const connectivityRatio = corridorCount > 0 ? roomCount / corridorCount : 0
-            const simpleScore = roomCount * 10 - Math.abs(connectivityRatio - 1.5) * 5
+            const legacyScore = roomCount * 10 - Math.abs(connectivityRatio - 1.5) * 5
 
             newVariants.push({
+              candidateIndex: index,
               seed: variantSeed,
-              score: simpleScore,
+              score: legacyScore,
+              hardPass: true,
+              paretoRank: 0,
+              hardIssues: [],
               roomCount,
               corridorCount,
+              map: result.map,
               data: editorData,
             })
           } catch (err: any) {
             console.warn(`Variant ${index + 1} failed:`, err.message)
           }
-          
+
           setGenState(s => ({ ...s, progress: ((index + 1) / variantCount) * 100 }))
           resolve()
-        }, 10) // Small delay to let UI update
+        }, 10)
       })
     }
 
-    // Generate variants sequentially with UI updates
-    for (let i = 0; i < variantCount; i++) {
-      await generateVariant(i)
+    for (let index = 0; index < variantCount; index++) {
+      await generateVariant(index)
     }
 
-    // Sort by score (higher is better)
-    newVariants.sort((a, b) => b.score - a.score)
-    setVariants(newVariants)
+    let rankedVariants = newVariants
+    if (generatorEngine === 'grid') {
+      const evaluations = rankGridCandidates(newVariants.map(variant => ({
+        index: variant.candidateIndex,
+        seed: variant.seed,
+        map: variant.map,
+      })), { archetype, sizeTier, loopiness })
+      const variantsByIndex = new Map(newVariants.map(variant => [variant.candidateIndex, variant]))
+      rankedVariants = evaluations.map(evaluation => ({
+        ...variantsByIndex.get(evaluation.index)!,
+        score: evaluation.balancedScore,
+        hardPass: evaluation.hardPass,
+        paretoRank: evaluation.paretoRank,
+        hardIssues: evaluation.hardIssues,
+        objectives: evaluation.objectives,
+      }))
+    } else {
+      rankedVariants.sort((a, b) => b.score - a.score)
+    }
+
+    setVariants(rankedVariants)
     setGenState(s => ({ ...s, isGenerating: false, progress: 100 }))
-  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, generatorEngine, variantCount, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty])
+  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, generatorEngine, variantCount, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, generateRandomSeed])
 
   // Apply selected variant
   const handleApplyVariant = useCallback((index: number) => {
     const variant = variants[index]
-    if (!variant?.data) return
+    if (!variant?.data || !variant.hardPass) return
 
     const config = ARCHETYPE_CONFIGS[archetype]
     const name = `${config.label} (${variant.seed})`
@@ -1071,7 +1111,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   {variants.map((v, i) => (
                     <div
                       key={v.seed}
-                      onClick={() => setSelectedVariant(i)}
+                      onClick={() => v.hardPass && setSelectedVariant(i)}
                       onDoubleClick={() => handleApplyVariant(i)}
                       className={`p-3 rounded border cursor-pointer transition-all ${
                         selectedVariant === i
@@ -1081,9 +1121,15 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                     >
                       <div className="flex justify-between items-start mb-1">
                         <span className="text-xs font-mono text-cyber-blue">{v.seed}</span>
-                        {i === 0 && (
-                          <span className="text-[10px] bg-cyber-green/20 text-cyber-green px-1 rounded">
-                            Best
+                        {v.hardPass ? (
+                          i === 0 && (
+                            <span className="text-[10px] bg-cyber-green/20 text-cyber-green px-1 rounded">
+                              Best valid
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-[10px] bg-red-500/20 text-red-300 px-1 rounded">
+                            Rejected
                           </span>
                         )}
                       </div>
@@ -1091,12 +1137,24 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                         {v.roomCount} rooms, {v.corridorCount} corridors
                       </div>
                       <div className="text-xs text-space-500">
-                        Score: {v.score.toFixed(2)}
+                        {generatorEngine === 'grid' ? 'Quality' : 'Score'}: {generatorEngine === 'grid'
+                          ? `${(v.score * 100).toFixed(0)}% · Pareto ${v.paretoRank + 1}`
+                          : v.score.toFixed(2)}
                       </div>
+                      {v.objectives && (
+                        <div className="mt-1 text-[10px] text-space-500">
+                          Route {(v.objectives.routeClarity * 100).toFixed(0)} · Hull {(v.objectives.hullUseFit * 100).toFixed(0)} · TTRPG {(v.objectives.ttrpgChoice * 100).toFixed(0)}
+                        </div>
+                      )}
+                      {!v.hardPass && (
+                        <div className="mt-1 text-[10px] text-red-300">
+                          {v.hardIssues.join(' · ')}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
-                {selectedVariant !== null && (
+                {selectedVariant !== null && variants[selectedVariant]?.hardPass && (
                   <button
                     onClick={() => handleApplyVariant(selectedVariant)}
                     className="w-full btn btn-cyber"
@@ -1122,7 +1180,24 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   <span>Junctions: {previewData.diagnostics.junctionCount ?? '?'}</span>
                   <span>Dead ends: {previewData.diagnostics.deadEndRatio ?? '?'}</span>
                 </div>
-                {previewData.diagnostics.aestheticStatus && (
+                {previewData.diagnostics.candidateSelection && (
+                  <div className="rounded border border-cyber-blue/40 bg-cyber-blue/10 p-2 text-[11px] text-space-300">
+                    <div className="flex items-center justify-between font-medium text-cyber-blue">
+                      <span>Candidate selection</span>
+                      <span>
+                        {previewData.diagnostics.candidateSelection.passedCandidates}/{previewData.diagnostics.candidateSelection.evaluatedCandidates} valid
+                      </span>
+                    </div>
+                    <div className="mt-1 grid grid-cols-3 gap-1 text-space-400">
+                      <span>Route {(previewData.diagnostics.candidateSelection.objectives.routeClarity * 100).toFixed(0)}</span>
+                      <span>Hull {(previewData.diagnostics.candidateSelection.objectives.hullUseFit * 100).toFixed(0)}</span>
+                      <span>TTRPG {(previewData.diagnostics.candidateSelection.objectives.ttrpgChoice * 100).toFixed(0)}</span>
+                    </div>
+                    <div className="mt-1 text-space-500">
+                      Pareto {previewData.diagnostics.candidateSelection.paretoRank + 1} · candidate #{previewData.diagnostics.candidateSelection.selectedIndex + 1}
+                    </div>
+                  </div>
+                )}                {previewData.diagnostics.aestheticStatus && (
                   <div className={`rounded border p-2 text-[11px] ${
                     previewData.diagnostics.aestheticStatus === 'pass'
                       ? 'border-green-500/40 bg-green-500/10 text-green-300'

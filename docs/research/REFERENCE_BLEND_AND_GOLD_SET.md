@@ -298,6 +298,7 @@ LLM может предлагать функциональную програм�
 
 ## 10. Candidate generation и selection
 
+> Implementation status: active grid generation now uses a deterministic responsive pool (`4/4/3/2/2` for `XS/SM/MD/LG/XL`), hard rejection, three-objective Pareto fronts and a min-aware tie-break. The `24–48` pool, diversity selection, novelty checks and `Functional/Balanced/Expressive` finalists below remain the calibrated target, not current runtime behavior.
 Рекомендуемый первый вариант реализации:
 
 - 24–48 кандидатов на один пользовательский seed;

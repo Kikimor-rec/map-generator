@@ -223,18 +223,89 @@ function extractCorridors(canvas: GridCanvas, placements: RoomPlacement[]): Layo
       const path = simplifyGridPath(edge.path).map(p => gridPointToWorld(p, canvas.tileSize))
       if (startAnchor.kind === 'roomPort') path[0] = { ...startAnchor.position }
       if (endAnchor.kind === 'roomPort') path[path.length - 1] = { ...endAnchor.position }
+      const orthogonalPath = orthogonalizeEndpointStubs(path, startAnchor, endAnchor, placements)
       return {
         id: `corridor-edge-${idx}`,
         fromRoomId: endpoints.fromRoomId,
         toRoomId: endpoints.toRoomId,
         kind: 'corridor',
-        path,
+        path: orthogonalPath,
         width: canvas.tileSize,
         widthClass: edge.connectorIds.length > 1 ? 'wide' : 'standard',
         startAnchor,
         endAnchor,
       }
     })
+}
+
+function orthogonalizeEndpointStubs(
+  path: Point[],
+  startAnchor: LayoutConnectorEndpointAnchor,
+  endAnchor: LayoutConnectorEndpointAnchor,
+  placements: RoomPlacement[]
+): Point[] {
+  if (path.length < 2) return path
+  const result = path.map(point => ({ ...point }))
+
+  if (!pointsAreOrthogonal(result[0], result[1])) {
+    const wall = resolveRoomPortWall(startAnchor, placements)
+    result.splice(1, 0, wall === 'left' || wall === 'right'
+      ? { x: result[1].x, y: result[0].y }
+      : { x: result[0].x, y: result[1].y })
+  }
+
+  const endIndex = result.length - 1
+  if (!pointsAreOrthogonal(result[endIndex - 1], result[endIndex])) {
+    const wall = resolveRoomPortWall(endAnchor, placements)
+    result.splice(endIndex, 0, wall === 'left' || wall === 'right'
+      ? { x: result[endIndex - 1].x, y: result[endIndex].y }
+      : { x: result[endIndex].x, y: result[endIndex - 1].y })
+  }
+
+  const fullyOrthogonal: Point[] = [result[0]]
+  for (let index = 1; index < result.length; index++) {
+    const previous = fullyOrthogonal[fullyOrthogonal.length - 1]
+    const current = result[index]
+    if (!pointsAreOrthogonal(previous, current)) {
+      fullyOrthogonal.push({ x: current.x, y: previous.y })
+    }
+    fullyOrthogonal.push(current)
+  }
+
+  return simplifyWorldPath(fullyOrthogonal)
+}
+
+function resolveRoomPortWall(
+  anchor: LayoutConnectorEndpointAnchor,
+  placements: RoomPlacement[]
+): 'top' | 'bottom' | 'left' | 'right' | undefined {
+  if (anchor.kind !== 'roomPort') return undefined
+  const placement = placements.find(candidate => candidate.roomId === anchor.roomId)
+  if (!placement) return undefined
+  const doorIndex = placement.doorPositions.findIndex(
+    (_door, index) => `port-${placement.roomId}-${index}` === anchor.portId
+  )
+  const door = placement.doorPositions[doorIndex]
+  return door ? determineDoorWall(door, placement) : undefined
+}
+
+function pointsAreOrthogonal(a: Point, b: Point): boolean {
+  return a.x === b.x || a.y === b.y
+}
+
+function simplifyWorldPath(path: Point[]): Point[] {
+  const unique = path.filter((point, index) =>
+    index === 0 || point.x !== path[index - 1].x || point.y !== path[index - 1].y
+  )
+  return unique.filter((point, index) => {
+    if (index === 0 || index === unique.length - 1) return true
+    const previous = unique[index - 1]
+    const next = unique[index + 1]
+    return !(
+      (previous.x === point.x && point.x === next.x) ||
+      (previous.y === point.y && point.y === next.y)
+    )
+  })
 }
 
 function gridPointToWorld(point: Point, tileSize: number): Point {
@@ -556,6 +627,8 @@ function buildMeta(
       criticalReachability: playability.metrics.criticalRoomReachabilityPercent,
       reachableRoomPairPercent: playability.metrics.reachableRoomPairPercent,
       alternateRoutePairPercent: playability.metrics.alternateRoutePairPercent,
+      alternateRoutePairCandidateCount: playability.metrics.alternateRoutePairCandidateCount,
+      entryBasis: playability.entryBasis,
       circulationCycleRank: playability.metrics.circulationCycleRank,
       averageRoomRouteDistance: playability.metrics.averageRoomRouteDistance,
       longestRoomRouteDistance: playability.metrics.longestRoomRoute?.distance ?? null,

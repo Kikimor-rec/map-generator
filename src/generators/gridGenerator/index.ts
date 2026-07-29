@@ -220,3 +220,17 @@ export {
   type AestheticValidationOptions,
   type AestheticViolation,
 } from './aestheticValidator'
+export {
+  deriveGridCandidateSeed,
+  evaluateGridCandidate,
+  generateBestGridMap,
+  generateBestGridMapAsync,
+  getDefaultGridCandidateCount,
+  rankGridCandidates,
+  type AsyncGridCandidateHooks,
+  type BestGridMapResult,
+  type GridCandidateEvaluation,
+  type GridCandidateEvaluationContext,
+  type GridCandidateHardIssue,
+  type GridCandidateInput,
+} from './candidateSelector'

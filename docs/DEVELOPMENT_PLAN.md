@@ -165,6 +165,8 @@
 | Функциональное archetype-aware placement | ⚠️ | Active occupancy scorer + outpost module metadata; rectangular bays, без global adjacency solve и props |
 | Валидация связности | ✅ | Active V2: physical-grid connectivity + critical entry reachability |
 | Предупреждения о нелогичности | ⚠️ | Structured read-only playability report готов; UI review/quick-fix ещё нет |
+| Детерминированный best-of-N quality selection | ✅ | Active grid: hard gates, 4/4/3/2/2 pool, Pareto по route/hull/TTRPG, min-aware tie-break, versioned selection metadata |
+| Diversity и три финалиста Functional/Balanced/Expressive | ❌ | Нужны gold-set calibration, novelty/topology hash и larger candidate pool |
 
 ---
 

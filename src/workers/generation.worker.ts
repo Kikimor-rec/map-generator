@@ -1,6 +1,8 @@
 
 import {
     generateMap,
+    generateBestGridMapAsync,
+    getDefaultGridCandidateCount,
     GeneratorOptions
 } from '../generators';
 import { runQualityPipeline, QualityPipelineOptions, RefinementUpdate } from '../generators/quality';
@@ -102,7 +104,45 @@ ctx.onmessage = async (event: MessageEvent<WorkerMessage>) => {
                 ctx.postMessage({ type: 'PROGRESS', payload: { progress: 60, message: 'Routing corridors (MST + A*)...', stage: 'corridors' } });
                 await new Promise(r => setTimeout(r, 10));
 
-                const result = generateMap(payload);
+                let resultMap;
+                const candidateCount = payload.gridCandidateCount ??
+                    getDefaultGridCandidateCount(payload.sizeTier);
+
+                if ((payload.engine ?? 'grid') === 'grid' && candidateCount > 1) {
+                    const selected = await generateBestGridMapAsync({
+                        seed: payload.seed,
+                        archetype: payload.archetype,
+                        subtype: payload.subtype,
+                        sizeTier: payload.sizeTier,
+                        styleProfile: payload.styleProfile,
+                        loopiness: payload.loopiness,
+                        danger: payload.danger,
+                        debug: false,
+                    }, candidateCount, {
+                        signal,
+                        onCandidate: (completed, total) => {
+                            ctx.postMessage({
+                                type: 'PROGRESS',
+                                payload: {
+                                    progress: 60 + (completed / total) * 24,
+                                    message: `Reviewing candidate ${completed} of ${total}...`,
+                                    stage: 'candidate-selection'
+                                }
+                            });
+                        }
+                    });
+                    if (signal.aborted) return;
+                    if (!selected.success || !selected.map) {
+                        throw new Error(selected.error || 'No valid grid candidate');
+                    }
+                    resultMap = selected.map;
+                } else {
+                    const result = generateMap({ ...payload, gridCandidateCount: 1 });
+                    if (!result.success || !result.map) {
+                        throw new Error(result.issues.map(issue => issue.message).join(', ') || 'Generation failed');
+                    }
+                    resultMap = result.map;
+                }
 
                 ctx.postMessage({ type: 'PROGRESS', payload: { progress: 85, message: 'Placing doors...', stage: 'doors' } });
                 await new Promise(r => setTimeout(r, 10));
@@ -111,7 +151,7 @@ ctx.onmessage = async (event: MessageEvent<WorkerMessage>) => {
                 await new Promise(r => setTimeout(r, 10));
 
                 if (!signal.aborted) {
-                    ctx.postMessage({ type: 'COMPLETE', payload: result.map });
+                    ctx.postMessage({ type: 'COMPLETE', payload: resultMap });
                 }
             }
 
