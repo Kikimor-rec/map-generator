@@ -101,9 +101,11 @@ Gate:
   hard-gate/Pareto selector;
 - [x] ship, station, and outpost corpus fixtures call the same facade and pass
   deterministic summaries;
-- [x] fresh connectors carry an explicit representation and compatibility
-  fixtures cover historical prefixed grid, arbitrary-ID legacy/physical, and
-  mixed-deck input;
+- [x] production `MapJSON` connectors carry an explicit representation and
+  compatibility fixtures cover historical prefixed grid, arbitrary-ID
+  legacy/physical, and mixed-deck input; retained quality `MapJSONCompat`
+  remains compatibility/regression-only, uses no production discriminator
+  unless normalized, and never enters the UI or worker;
 - [x] the production boundary checker is part of `npm run check`;
 - [x] tests, lint, typecheck, boundary check, and build pass locally;
 - [ ] remote CI passes for the pushed Phase 1 commit.
@@ -123,7 +125,7 @@ Gate:
   `npm run check:generator-boundary` — 2 entry points checked,
   `production generator boundary: ok`;
 - capped application suite:
-  `npm test -- --maxWorkers=2` — 34 files, 292 tests passed;
+  `npx vitest run --maxWorkers=2` — 34 files, 292 tests passed;
 - `npm run lint` — 0 errors, 128 pre-existing warnings;
 - `npm run typecheck` — passed;
 - `npm run build` — passed, 536 modules transformed;
@@ -131,10 +133,10 @@ Gate:
   lint/typecheck/boundary/build all completed.
 
 The dedicated boundary test is a Node `node:test` file and is intentionally
-excluded by the repository's Vitest script. A raw unexcluded
-`npx vitest run --maxWorkers=2` run passed all 292 Vitest assertions but then
-reported that Node-only file as “No test suite found”; the file passes 3/3
-under its intended Node runner above.
+excluded by the shared Vitest configuration. Raw and package-script Vitest runs
+therefore use the same collection boundary. The fixture remains covered by its
+3/3 direct Node run above; the canonical gate also runs the production boundary
+verifier.
 
 **Remote CI:** Pending. No Phase 1 branch run has been pushed or observed yet.
 

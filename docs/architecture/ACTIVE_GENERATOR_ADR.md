@@ -109,10 +109,16 @@ allowed. The boundary command is part of `npm run check`.
 
 ## Connector representation
 
-Newly generated connectors always serialize one explicit representation:
+All production `MapJSON` connectors serialize one explicit representation:
 
 - `physical-topology-edge-v1` for occupancy-derived physical graph edges;
 - `room-route-v1` for historical room-to-room routes.
+
+The occupancy production writer emits the physical value. The retained legacy
+regression writer emits the room-route value. The separately retained quality
+`MapJSONCompat` writer is compatibility/regression-only: it does not use this
+production discriminator unless and until its output is normalized, and it is
+not reachable from the production UI or worker.
 
 `normalizeConnectorRepresentation()` applies the compatibility rules:
 
@@ -127,7 +133,7 @@ edges, while only room routes receive legacy coalescing and endpoint-door
 adaptation. No deck-wide classification is permitted.
 
 The optional type field exists only so historical discriminator-free JSON can
-still be read. Production writers must always include it.
+still be read. Production `MapJSON` writers must always include it.
 
 ## Canonical document boundary
 
@@ -144,7 +150,7 @@ format.
   not regenerate competing geometry.
 - UI and worker use the same facade and typed request/response protocol.
 - Quality and legacy generators are compatibility/regression-only.
-- New connectors carry an explicit representation.
+- Production `MapJSON` connectors carry an explicit representation.
 - Historical connector inference exists only in the compatibility normalizer
   and is applied per connector.
 - Seeded generation and candidate selection remain deterministic.

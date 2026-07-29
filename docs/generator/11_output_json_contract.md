@@ -98,7 +98,7 @@ tile mask и сохраняет его через этот bridge. `structuralVo
 
 ### 11.5.1 Connector representation
 
-Every new connector serializes:
+Every production `MapJSON` connector serializes:
 
 ```ts
 representation:
@@ -108,8 +108,13 @@ representation:
 
 `physical-topology-edge-v1` identifies graph edges derived from occupancy
 tiles. `room-route-v1` identifies historical room-to-room paths. Fresh
-occupancy output always writes the former; the retained compatibility generator
-always writes the latter.
+occupancy output always writes the former; the retained legacy regression
+writer writes the latter.
+
+The separately retained quality pipeline produces `MapJSONCompat` only for
+compatibility/regression use. Its connectors do not use this production
+discriminator unless and until that output is normalized, and that writer never
+enters the production UI or worker path.
 
 The property remains optional in `LayoutConnector` only for old JSON that
 predates the discriminator. During import:

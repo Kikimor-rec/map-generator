@@ -9,7 +9,7 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run --exclude scripts/__tests__/**",
+    "test": "vitest run",
     "test:watch": "vitest --exclude scripts/__tests__/**",
     "typecheck": "tsc -b --pretty false",
     "check:generator-boundary": "node scripts/verify-production-generation-boundary.mjs",

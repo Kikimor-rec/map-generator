@@ -188,10 +188,13 @@ component solving, door states, damage and gas propagation remain future work.
 - `physical-topology-edge-v1` — an occupancy-derived physical graph edge;
 - `room-route-v1` — a historical room-to-room route.
 
-Fresh occupancy conversion always writes `physical-topology-edge-v1`.
-The retained historical generator always writes `room-route-v1`. The field is
-optional in the TypeScript bridge only so discriminator-free historical JSON
-can still be imported; all new documents must serialize it explicitly.
+All production `MapJSON` connectors serialize the field explicitly. Fresh
+occupancy conversion writes `physical-topology-edge-v1`; the retained legacy
+regression writer writes `room-route-v1`. The separately retained quality
+`MapJSONCompat` writer is compatibility/regression-only, does not use the
+production discriminator unless and until its output is normalized, and never
+enters the production UI or worker. The field is optional in the TypeScript
+bridge only so discriminator-free historical JSON can still be imported.
 
 `normalizeConnectorRepresentation()` is the single historical fallback:
 

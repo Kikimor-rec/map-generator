@@ -107,7 +107,7 @@ ranks their returned occupancy maps with the same candidate evaluation policy.
 
 ## Connectors and editor adaptation
 
-Each new connector includes:
+Each production `MapJSON` connector includes:
 
 ```ts
 representation:
@@ -119,6 +119,11 @@ Occupancy conversion writes `physical-topology-edge-v1`; the historical legacy
 pipeline writes `room-route-v1`. Explicit values win even when an ID looks
 historical. Only discriminator-free `corridor-edge-*` IDs fall back to physical
 topology; all other missing values fall back to room routes.
+
+The retained quality pipeline writes its separate `MapJSONCompat` shape for
+compatibility/regression use. It does not use the production discriminator
+unless and until that output is normalized, and it never enters the production
+UI or worker path.
 
 The editor adapter normalizes each connector separately. It preserves physical
 graph edges without legacy coalescing, coalesces only room-route connectors,
