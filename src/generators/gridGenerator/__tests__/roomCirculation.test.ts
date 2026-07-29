@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ProgrammedRoom, SeededRNG } from '../../types'
 import { generateGridMap } from '../index'
 import type { Rect, RoomPlacement } from '../types'
-import { planRoomCirculation } from '../roomCirculation'
+import { canInterruptBackbone, planRoomCirculation } from '../roomCirculation'
 
 function room(overrides: Partial<ProgrammedRoom> = {}): ProgrammedRoom {
   return {
@@ -78,6 +78,13 @@ describe('room circulation planning', () => {
       rngWithChance(true)
     ).desiredRole).toBe('through')
   })
+
+  it('only allows suitable internal rooms to interrupt a backbone', () => {
+    expect(canInterruptBackbone(room({ roomType: 'messhall' }))).toBe(true)
+    expect(canInterruptBackbone(room({ roomType: 'airlock', isExterior: false }))).toBe(true)
+    expect(canInterruptBackbone(room({ roomType: 'airlock', isExterior: true }))).toBe(false)
+    expect(canInterruptBackbone(room({ roomType: 'bridge' }))).toBe(false)
+  })
 })
 
 describe('generated through rooms', () => {
@@ -150,6 +157,36 @@ describe('generated through rooms', () => {
     const second = generateGridMap(options).placements ?? []
 
     expect(first.map(roleSnapshot)).toEqual(second.map(roleSnapshot))
+  })
+
+  it.each([
+    { archetype: 'ship' as const, subtype: 'explorer', seed: 'backbone-room-ship' },
+    { archetype: 'station' as const, subtype: 'habitat', seed: 'backbone-room-station' },
+    { archetype: 'outpost' as const, subtype: 'mining', seed: 'backbone-room-outpost' },
+  ])('interrupts at least one corridor with a transit room in $archetype', fixture => {
+    const result = generateGridMap({
+      ...fixture,
+      sizeTier: 'md',
+      loopiness: 0.65,
+    })
+    expect(result.success, result.error).toBe(true)
+
+    const interruptions = (result.placements ?? []).filter(
+      placement => placement.interruptsBackbone
+    )
+    expect(interruptions.length).toBeGreaterThanOrEqual(1)
+
+    for (const placement of interruptions) {
+      expect(placement.circulationRole === 'through' || placement.circulationRole === 'hub')
+        .toBe(true)
+      expect(placement.program.isExterior).toBe(false)
+      expect(new Set(placement.doorPositions.map(door =>
+        doorWall(placement.bounds, door)
+      )).size).toBeGreaterThanOrEqual(2)
+      expect(result.map?.decks[0].rooms.find(
+        room => room.id === placement.roomId
+      )?.interruptsBackbone).toBe(true)
+    }
   })
 })
 

@@ -7,6 +7,7 @@
  */
 
 import type {
+  ProgrammedRoom,
   GenerationRequest,
   RoomProgram,
   SeededRNG,
@@ -29,7 +30,11 @@ import {
 } from './functionalRoomPlacement'
 import type { GridGeneratorOptions, GridGeneratorResult } from './index'
 import { classifyDoor, type ExteriorProximity } from './doorClassifier'
-import { planRoomCirculation } from './roomCirculation'
+import {
+  canInterruptBackbone,
+  planRoomCirculation,
+  type RoomCirculationPlan,
+} from './roomCirculation'
 
 interface CorridorRun {
   id: string
@@ -41,6 +46,14 @@ interface Slot {
   door: Point
   corridorStart: Point
   anchor: Point
+  zone: string
+}
+
+interface BackboneTransitSlot {
+  rect: Rect
+  doors: Point[]
+  orientation: 'horizontal' | 'vertical' | 'hub'
+  runId?: string
   zone: string
 }
 
@@ -526,13 +539,6 @@ function placeRoomsOnCorridorBays(
 ): RoomPlacement[] {
   const placements: RoomPlacement[] = []
   const occupied: Rect[] = []
-  const slots = buildRoomSlots(canvas, zones, spines)
-  const functionalSlots = slots.map(slot => annotateFunctionalSlot(
-    canvas,
-    slot,
-    subtype,
-    hullLayout
-  ))
   const sortedRooms = [...roomProgram.rooms].sort((a, b) => {
     const importance = { primary: 0, secondary: 1, tertiary: 2 }
     const ai = importance[a.importance] ?? 2
@@ -541,7 +547,35 @@ function placeRoomsOnCorridorBays(
     return b.estimatedTiles - a.estimatedTiles
   })
 
+  const circulationPlans = new Map<string, RoomCirculationPlan>()
   for (const room of sortedRooms) {
+    circulationPlans.set(
+      room.id,
+      planRoomCirculation(room, canvas.archetype, rng)
+    )
+  }
+
+  const transitPlacements = placeBackboneTransitRooms(
+    canvas,
+    sortedRooms,
+    spines,
+    circulationPlans,
+    occupied,
+    rng
+  )
+  placements.push(...transitPlacements)
+  const transitRoomIds = new Set(transitPlacements.map(room => room.roomId))
+
+  const slots = buildRoomSlots(canvas, zones, spines, rng)
+  const functionalSlots = slots.map(slot => annotateFunctionalSlot(
+    canvas,
+    slot,
+    subtype,
+    hullLayout
+  ))
+
+  for (const room of sortedRooms) {
+    if (transitRoomIds.has(room.id)) continue
     const preferredSlots = rankFunctionalRoomSlots(room, functionalSlots, {
       archetype: canvas.archetype,
       subtype,
@@ -585,11 +619,361 @@ function placeRoomsOnCorridorBays(
     occupied.push(placed.bounds)
   }
 
-  assignRoomCirculation(canvas, placements, rng)
+  assignRoomCirculation(canvas, placements, circulationPlans)
   return placements
 }
 
-function buildRoomSlots(canvas: GridCanvas, zones: ZoneDefinition[], spines: CorridorRun[]): Slot[] {
+function placeBackboneTransitRooms(
+  canvas: GridCanvas,
+  rooms: ProgrammedRoom[],
+  spines: CorridorRun[],
+  plans: Map<string, RoomCirculationPlan>,
+  occupied: Rect[],
+  rng: SeededRNG
+): RoomPlacement[] {
+  const targetCount = canvas.sizeTier === 'lg' || canvas.sizeTier === 'xl' ? 2 : 1
+  const candidates = rooms.filter(canInterruptBackbone).sort((a, b) => {
+    const aHub = plans.get(a.id)?.desiredRole === 'hub' ? 0 : 1
+    const bHub = plans.get(b.id)?.desiredRole === 'hub' ? 0 : 1
+    return aHub - bHub
+  })
+  const placements: RoomPlacement[] = []
+
+  for (const room of candidates) {
+    if (placements.length >= targetCount) break
+    const slot = findBackboneTransitSlot(canvas, room, spines, occupied, rng)
+    if (!slot) continue
+
+    const originalPlan = plans.get(room.id)
+    plans.set(room.id, originalPlan?.desiredRole === 'hub'
+      ? originalPlan
+      : {
+          desiredRole: 'through',
+          targetConnectionCount: 2,
+          reason: 'backbone-interruption',
+        })
+
+    const placement = carveBackboneTransitRoom(canvas, room, slot)
+    placements.push(placement)
+    occupied.push(slot.rect)
+  }
+
+  return placements
+}
+
+function findBackboneTransitSlot(
+  canvas: GridCanvas,
+  room: ProgrammedRoom,
+  spines: CorridorRun[],
+  occupied: Rect[],
+  rng: SeededRNG
+): BackboneTransitSlot | null {
+  const preferredWidth = clampRoomDimension(room.estimatedWidth)
+  const preferredHeight = clampRoomDimension(room.estimatedHeight)
+  const sizes = uniqueSizes([
+    { width: preferredWidth, height: preferredHeight },
+    { width: 4, height: 4 },
+    { width: 3, height: 3 },
+  ])
+  const slots: BackboneTransitSlot[] = []
+  const seen = new Set<string>()
+
+  for (const run of spines) {
+    const runKeys = new Set(run.points.map(pointKey))
+    for (const point of run.points) {
+      const vertical =
+        runKeys.has(pointKey({ x: point.x, y: point.y - 1 })) &&
+        runKeys.has(pointKey({ x: point.x, y: point.y + 1 }))
+      const horizontal =
+        runKeys.has(pointKey({ x: point.x - 1, y: point.y })) &&
+        runKeys.has(pointKey({ x: point.x + 1, y: point.y }))
+
+      for (const size of sizes) {
+        if (vertical) {
+          appendTransitSlotsAt(
+            canvas, slots, seen, occupied, run.id, point, size, 'vertical'
+          )
+        }
+        if (horizontal) {
+          appendTransitSlotsAt(
+            canvas, slots, seen, occupied, run.id, point, size, 'horizontal'
+          )
+        }
+      }
+    }
+  }
+
+  if (canvas.archetype === 'station') {
+    slots.push(...findJunctionTransitSlots(canvas, occupied))
+  }
+
+  return rng.shuffle(slots)[0] ?? null
+}
+
+
+function findJunctionTransitSlots(
+  canvas: GridCanvas,
+  occupied: Rect[]
+): BackboneTransitSlot[] {
+  const slots: BackboneTransitSlot[] = []
+
+  for (let y = 2; y < canvas.height - 2; y += 1) {
+    for (let x = 2; x < canvas.width - 2; x += 1) {
+      const center = getTile(canvas, x, y)
+      if (!isCorridorLike(center)) continue
+      const corridorDegree = [
+        getTile(canvas, x, y - 1),
+        getTile(canvas, x + 1, y),
+        getTile(canvas, x, y + 1),
+        getTile(canvas, x - 1, y),
+      ].filter(isCorridorLike).length
+      if (corridorDegree < 3 && getTileConnectorIds(center).length < 2) continue
+
+      const rect = { x: x - 1, y: y - 1, width: 3, height: 3 }
+      if (
+        rectsOverlapAny(rect, occupied, 2) ||
+        !rectContainsOnlyHullAndCorridor(canvas, rect)
+      ) {
+        continue
+      }
+
+      const doors = junctionExitDoors(canvas, rect)
+      if (doors.length < 3) continue
+      slots.push({
+        rect,
+        doors,
+        orientation: 'hub',
+        zone: center?.zoneId ?? 'main',
+      })
+    }
+  }
+
+  return slots
+}
+
+function rectContainsOnlyHullAndCorridor(
+  canvas: GridCanvas,
+  rect: Rect
+): boolean {
+  for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+      const tile = getTile(canvas, x, y)
+      if (!tile || (tile.type !== TileType.HULL && !isCorridorLike(tile))) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+function junctionExitDoors(canvas: GridCanvas, rect: Rect): Point[] {
+  const candidates = [
+    ...Array.from({ length: rect.width }, (_, offset) => ({
+      door: { x: rect.x + offset, y: rect.y },
+      outside: { x: rect.x + offset, y: rect.y - 1 },
+      wall: 'top',
+    })),
+    ...Array.from({ length: rect.height }, (_, offset) => ({
+      door: { x: rect.x + rect.width - 1, y: rect.y + offset },
+      outside: { x: rect.x + rect.width, y: rect.y + offset },
+      wall: 'right',
+    })),
+    ...Array.from({ length: rect.width }, (_, offset) => ({
+      door: { x: rect.x + offset, y: rect.y + rect.height - 1 },
+      outside: { x: rect.x + offset, y: rect.y + rect.height },
+      wall: 'bottom',
+    })),
+    ...Array.from({ length: rect.height }, (_, offset) => ({
+      door: { x: rect.x, y: rect.y + offset },
+      outside: { x: rect.x - 1, y: rect.y + offset },
+      wall: 'left',
+    })),
+  ] as Array<{ door: Point; outside: Point; wall: RoomWall }>
+
+  const selected = new Map<RoomWall, Point>()
+  for (const candidate of candidates) {
+    if (!isCorridorLike(getTile(canvas, candidate.outside.x, candidate.outside.y))) {
+      continue
+    }
+    if (!selected.has(candidate.wall)) {
+      selected.set(candidate.wall, candidate.door)
+    }
+  }
+  return [...selected.values()]
+}
+
+function appendTransitSlotsAt(
+  canvas: GridCanvas,
+  slots: BackboneTransitSlot[],
+  seen: Set<string>,
+  occupied: Rect[],
+  runId: string,
+  point: Point,
+  size: { width: number; height: number },
+  orientation: 'horizontal' | 'vertical'
+): void {
+  const crossSize = orientation === 'vertical' ? size.width : size.height
+  const offsets = Array.from(new Set([
+    Math.floor(crossSize / 2),
+    1,
+    Math.max(1, crossSize - 2),
+  ]))
+
+  for (const offset of offsets) {
+    const rect = orientation === 'vertical'
+      ? {
+          x: point.x - offset,
+          y: point.y - Math.floor(size.height / 2),
+          width: size.width,
+          height: size.height,
+        }
+      : {
+          x: point.x - Math.floor(size.width / 2),
+          y: point.y - offset,
+          width: size.width,
+          height: size.height,
+        }
+    const key = `${orientation}:${rectKey(rect)}:${runId}`
+    if (
+      seen.has(key) ||
+      rectsOverlapAny(rect, occupied, 2) ||
+      !isViableBackboneTransitSlot(canvas, rect, orientation, point, runId)
+    ) {
+      continue
+    }
+    seen.add(key)
+
+    const doors: [Point, Point] = orientation === 'vertical'
+      ? [
+          { x: point.x, y: rect.y },
+          { x: point.x, y: rect.y + rect.height - 1 },
+        ]
+      : [
+          { x: rect.x, y: point.y },
+          { x: rect.x + rect.width - 1, y: point.y },
+        ]
+    const centerTile = getTile(
+      canvas,
+      rect.x + Math.floor(rect.width / 2),
+      rect.y + Math.floor(rect.height / 2)
+    )
+    slots.push({
+      rect,
+      doors,
+      orientation,
+      runId,
+      zone: centerTile?.zoneId ?? 'main',
+    })
+  }
+}
+
+function isViableBackboneTransitSlot(
+  canvas: GridCanvas,
+  rect: Rect,
+  orientation: 'horizontal' | 'vertical',
+  axisPoint: Point,
+  runId: string
+): boolean {
+  if (
+    rect.x < 1 ||
+    rect.y < 1 ||
+    rect.x + rect.width >= canvas.width - 1 ||
+    rect.y + rect.height >= canvas.height - 1
+  ) {
+    return false
+  }
+
+  const exits = orientation === 'vertical'
+    ? [
+        { x: axisPoint.x, y: rect.y - 1 },
+        { x: axisPoint.x, y: rect.y + rect.height },
+      ]
+    : [
+        { x: rect.x - 1, y: axisPoint.y },
+        { x: rect.x + rect.width, y: axisPoint.y },
+      ]
+  if (!exits.every(exit => tileBelongsOnlyToRun(canvas, exit, runId))) {
+    return false
+  }
+
+  for (let y = rect.y; y < rect.y + rect.height; y += 1) {
+    for (let x = rect.x; x < rect.x + rect.width; x += 1) {
+      const tile = getTile(canvas, x, y)
+      if (!tile || (tile.type !== TileType.HULL && !isCorridorLike(tile))) {
+        return false
+      }
+      if (!isCorridorLike(tile)) continue
+      const onAxis = orientation === 'vertical'
+        ? x === axisPoint.x
+        : y === axisPoint.y
+      if (!onAxis || !tileBelongsOnlyToRun(canvas, { x, y }, runId)) {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+function tileBelongsOnlyToRun(
+  canvas: GridCanvas,
+  point: Point,
+  runId: string
+): boolean {
+  const tile = getTile(canvas, point.x, point.y)
+  if (!isCorridorLike(tile)) return false
+  const connectorIds = getTileConnectorIds(tile)
+  return connectorIds.length === 1 && connectorIds[0] === runId
+}
+
+function carveBackboneTransitRoom(
+  canvas: GridCanvas,
+  room: ProgrammedRoom,
+  slot: BackboneTransitSlot
+): RoomPlacement {
+  fillRect(canvas, slot.rect, TileType.FLOOR, {
+    roomId: room.id,
+    zoneId: slot.zone,
+  })
+  const tiles: Point[] = []
+  for (let y = slot.rect.y; y < slot.rect.y + slot.rect.height; y += 1) {
+    for (let x = slot.rect.x; x < slot.rect.x + slot.rect.width; x += 1) {
+      tiles.push({ x, y })
+    }
+  }
+
+  return {
+    roomId: room.id,
+    roomType: room.roomType,
+    label: room.label,
+    tiles,
+    bounds: slot.rect,
+    zone: slot.zone,
+    doorPositions: slot.doors,
+    circulationRole: 'through',
+    interruptsBackbone: true,
+    program: room,
+  }
+}
+
+function clampRoomDimension(value: number): number {
+  return Math.max(3, Math.min(5, Math.round(value)))
+}
+
+function uniqueSizes(
+  sizes: Array<{ width: number; height: number }>
+): Array<{ width: number; height: number }> {
+  return [...new Map(sizes.map(size => [
+    `${size.width}x${size.height}`,
+    size,
+  ])).values()]
+}
+
+function buildRoomSlots(
+  canvas: GridCanvas,
+  zones: ZoneDefinition[],
+  spines: CorridorRun[],
+  rng: SeededRNG
+): Slot[] {
   const mainSpine = spines[0]
   const mainX = Math.min(...mainSpine.points.map(p => p.x))
   const yValues = Array.from(new Set(mainSpine.points.map(p => p.y))).sort((a, b) => a - b)
@@ -606,10 +990,17 @@ function buildRoomSlots(canvas: GridCanvas, zones: ZoneDefinition[], spines: Cor
 
   const roomHeights = [4, 5, 6, 7]
   let index = 0
-  for (let y = yValues[0] + 3; y < yValues[yValues.length - 1] - 4; y += 5) {
+  let y = yValues[0] + 3
+  let previousSideLeft: boolean | null = null
+  let sameSideCount = 0
+  while (y < yValues[yValues.length - 1] - 4) {
     const height = roomHeights[index % roomHeights.length]
     const width = index % 3 === 0 ? 5 : 4
-    const sideLeft = index % 2 === 0
+    const sideLeft: boolean = sameSideCount >= 2 && previousSideLeft !== null
+      ? !previousSideLeft
+      : rng.chance(0.5)
+    sameSideCount = sideLeft === previousSideLeft ? sameSideCount + 1 : 1
+    previousSideLeft = sideLeft
     const x = sideLeft ? mainX - width - 1 : mainX + MAIN_CORRIDOR_WIDTH + 1
     const rect = { x, y, width, height }
     const doorY = y + Math.floor(height / 2)
@@ -618,6 +1009,7 @@ function buildRoomSlots(canvas: GridCanvas, zones: ZoneDefinition[], spines: Cor
     const anchor = sideLeft ? { x: mainX, y: doorY } : { x: mainX + MAIN_CORRIDOR_WIDTH - 1, y: doorY }
     slots.push({ rect, door, corridorStart, anchor, zone: zoneAtY(y) })
     index++
+    y += rng.randomInt(4, 6)
   }
 
   for (const branch of spines.slice(1)) {
@@ -629,7 +1021,7 @@ function buildRoomSlots(canvas: GridCanvas, zones: ZoneDefinition[], spines: Cor
     const branchMaxX = Math.max(...branchXs)
 
     for (let x = branchMinX; x + 4 <= branchMaxX; x += 6) {
-      const above = (x + branchY) % 2 === 0
+      const above = rng.chance(0.5)
       const width = 5
       const height = 4
       const y = above ? branchY - height - 1 : branchY + MAIN_CORRIDOR_WIDTH + 1
@@ -866,10 +1258,11 @@ type RoomWall = 'top' | 'right' | 'bottom' | 'left'
 function assignRoomCirculation(
   canvas: GridCanvas,
   placements: RoomPlacement[],
-  rng: SeededRNG
+  plans: Map<string, RoomCirculationPlan>
 ): void {
   for (const room of placements) {
-    const plan = planRoomCirculation(room.program, canvas.archetype, rng)
+    const plan = plans.get(room.roomId)
+    if (!plan) continue
     if (plan.targetConnectionCount <= 1 || room.doorPositions.length === 0) {
       room.circulationRole = 'terminal'
       continue

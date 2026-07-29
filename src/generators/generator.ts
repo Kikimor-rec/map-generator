@@ -510,6 +510,7 @@ export function convertToEditorFormat(
         zone: layoutRoom.zone,
         roomType: layoutRoom.roomType,
         circulationRole: layoutRoom.circulationRole ?? 'terminal',
+        interruptsBackbone: layoutRoom.interruptsBackbone ?? false,
       },
       deckLevel: deckIndex,
       isVisible: true,

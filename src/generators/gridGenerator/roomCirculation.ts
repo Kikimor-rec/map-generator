@@ -14,6 +14,7 @@ export interface RoomCirculationPlan {
     | 'pressure-transition'
     | 'shared-space'
     | 'optional-shortcut'
+    | 'backbone-interruption'
 }
 
 const EXTERIOR_TERMINALS = new Set([
@@ -47,6 +48,21 @@ const OPTIONAL_THROUGH_ROOMS = new Set([
   'comms',
   'communicationscenter',
   'securitystation',
+])
+
+const BACKBONE_TRANSIT_ROOMS = new Set([
+  'airlock',
+  'commonarea',
+  'market',
+  'operations',
+  'opshub',
+  'messhall',
+  'galley',
+  'recreation',
+  'recreationroom',
+  'bar',
+  'lounge',
+  'cargobay',
 ])
 
 /**
@@ -104,6 +120,16 @@ export function planRoomCirculation(
   }
 
   return terminal('destination')
+}
+
+/**
+ * Rooms that may replace a short backbone segment instead of hanging from it.
+ * Exterior docking and evacuation spaces stay terminal even when their room
+ * type would otherwise be suitable for circulation.
+ */
+export function canInterruptBackbone(room: ProgrammedRoom): boolean {
+  return !room.isExterior &&
+    BACKBONE_TRANSIT_ROOMS.has(normalizeRoomType(room.roomType))
 }
 
 function terminal(

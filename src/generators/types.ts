@@ -222,6 +222,7 @@ export interface LayoutRoom {
   isExterior: boolean
   tags?: string[]
   circulationRole?: RoomCirculationRole
+  interruptsBackbone?: boolean
   metadata?: RoomMetadata
 }
 

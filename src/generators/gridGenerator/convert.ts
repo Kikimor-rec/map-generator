@@ -147,6 +147,7 @@ function convertPlacementToLayoutRoom(
     isExterior: placement.program.isExterior || false,
     tags: placement.program.tags,
     circulationRole: placement.circulationRole,
+    interruptsBackbone: placement.interruptsBackbone,
   }
 }
 

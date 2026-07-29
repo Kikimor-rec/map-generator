@@ -76,7 +76,7 @@ function shortestDistanceToBackbone(canvas: GridCanvas, start: Point): number {
 }
 
 describe('ship longitudinal circulation', () => {
-  it.each(SIZE_TIERS)('carves a centered continuous longitudinal spine for %s ships', sizeTier => {
+  it.each(SIZE_TIERS)('carves a centered longitudinal route interrupted only by transit rooms for %s ships', sizeTier => {
     const result = generateGridMap({
       seed: SEED,
       archetype: 'ship',
@@ -92,7 +92,17 @@ describe('ship longitudinal circulation', () => {
 
     expect(xValues).toHaveLength(1)
     expect(Math.abs(xValues[0] - (bounds.minX + bounds.maxX) / 2)).toBeLessThanOrEqual(1)
-    expect(yValues).toHaveLength(yValues[yValues.length - 1] - yValues[0] + 1)
+    for (let y = yValues[0]; y <= yValues[yValues.length - 1]; y += 1) {
+      const tile = result.canvas!.tiles[y][xValues[0]]
+      const transitRoom = result.placements!.find(room =>
+        room.tiles.some(point => point.x === xValues[0] && point.y === y) &&
+        (room.circulationRole === 'through' || room.circulationRole === 'hub')
+      )
+      expect(
+        getTileConnectorIds(tile).includes('spine-main') || !!transitRoom,
+        `longitudinal route has an unexplained gap at (${xValues[0]}, ${y})`
+      ).toBe(true)
+    }
     expect(yValues.length / (bounds.maxY - bounds.minY + 1)).toBeGreaterThanOrEqual(0.8)
   })
 
@@ -115,7 +125,17 @@ describe('ship longitudinal circulation', () => {
 
       expect(branch.length).toBeGreaterThanOrEqual(5)
       expect(branchYs).toHaveLength(1)
-      expect(branchXs).toHaveLength(branchXs[branchXs.length - 1] - branchXs[0] + 1)
+      for (let x = branchXs[0]; x <= branchXs[branchXs.length - 1]; x += 1) {
+        const tile = result.canvas!.tiles[branchYs[0]][x]
+        const transitRoom = result.placements!.find(room =>
+          room.tiles.some(point => point.x === x && point.y === branchYs[0]) &&
+          (room.circulationRole === 'through' || room.circulationRole === 'hub')
+        )
+        expect(
+          getTileConnectorIds(tile).includes(connectorId) || !!transitRoom,
+          `transverse route has an unexplained gap at (${x}, ${branchYs[0]})`
+        ).toBe(true)
+      }
       expect(branchXs).toContain(mainX)
       expect(
         getTileConnectorIds(result.canvas!.tiles[branchYs[0]][mainX])

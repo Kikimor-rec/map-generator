@@ -193,6 +193,8 @@ export interface RoomPlacement {
   doorPositions: Point[]
   /** Actual generated circulation role after all viable ports are carved. */
   circulationRole: RoomCirculationRole
+  /** The room physically replaces a backbone segment or junction. */
+  interruptsBackbone?: boolean
   /** Original program data */
   program: ProgrammedRoom
 }
