@@ -121,4 +121,26 @@ Worker делает yield между кандидатами и проверяе�
 
 ### Текущие ограничения
 
-Selector пока не доказывает полную pressure/airlock chain, столкновения со structural voids, узнаваемость silhouette без подписей и diversity относительно предыдущих результатов. Эти проверки остаются отдельными quality gates и должны калиброваться на собственном gold set проекта.
+Evaluator v2 дополнительно hard-rejects:
+
+- disconnected preserved facility envelope;
+- room/circulation occupancy за исходной hull mask;
+- invalid airlock/bulkhead physical metadata;
+- internal airlock, который не является двухсторонним transit space;
+- exterior airlock вне hull boundary.
+
+`hullUseFit` теперь сочетает usable hull occupancy (55%) и измеренный
+archetype silhouette fit (45%). Слабая узнаваемость остаётся soft warning, а не
+запретом необычной карты.
+
+Остаются ограничения:
+
+- нет explicit exterior second hatch и authoritative pressure ingress chain;
+- нет generated typed machinery/terrain keepout masses сверх экспорта
+  enclosed negative space;
+- нет gold-set classifier узнаваемости без подписей;
+- нет novelty/topology hash и diversity относительно предыдущих результатов.
+
+Таким образом, текущий gate обнаруживает structural escape и неправдоподобную
+room-side airlock topology, но не выдаёт это за полную compartment pressure
+simulation.

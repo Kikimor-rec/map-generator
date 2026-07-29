@@ -30,6 +30,12 @@ function makeMetrics(overrides: Partial<TTRPGMetrics> = {}): TTRPGMetrics {
     hullUtilizationPercent: 30,
     ambiguousDoorCount: 0,
     doorMetadataMismatchCount: 0,
+    facilityStructureStatus: 'pass',
+    hullComponentCount: 1,
+    structuralVoidCollisionCount: 0,
+    silhouetteFitScore: 100,
+    pressureStatus: 'pass',
+    invalidPressureDoorCount: 0,
     playabilityViolationCodes: [],
     aestheticViolationCodes: [],
     ...overrides,
@@ -206,6 +212,25 @@ describe('grid candidate selection', () => {
       .toContain('FALLBACK_ENTRY')
     expect(ranked.find(candidate => candidate.seed === 'nan')?.hardIssues)
       .toContain('NON_FINITE_OBJECTIVE')
+  })
+
+  it('hard-rejects facility collisions and invalid pressure topology', () => {
+    const ranked = rankGridCandidates([{
+      index: 0,
+      seed: 'unsafe',
+      map: makeMap('unsafe', {
+        facilityStructureStatus: 'error',
+        structuralVoidCollisionCount: 2,
+        pressureStatus: 'error',
+        invalidPressureDoorCount: 1,
+      }),
+    }])
+
+    expect(ranked[0].hardIssues).toEqual(expect.arrayContaining([
+      'FACILITY_STRUCTURE_ERROR',
+      'STRUCTURAL_VOID_COLLISION',
+      'PRESSURE_TOPOLOGY_ERROR',
+    ]))
   })
 
   it('selects reproducibly and keeps the exact selected child seed', () => {

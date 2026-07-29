@@ -125,3 +125,31 @@ ID должны быть стабильными для `seed`:
 ## 11.9 Debug/Trace (опционально)
 - `debug.graph`: adjacency list
 - `debug.steps`: список этапов с промежуточными метриками
+
+## 11.10 Quality metadata v2
+
+Свежие grid maps сохраняют в `meta.ttrpgMetrics` компактные optional metrics.
+
+Facility structure:
+
+- `facilityStructureStatus`, `facilityStructureViolationCodes`;
+- `hullComponentCount`;
+- `structuralVoidCount`, `structuralVoidCollisionCount`;
+- `hullAspectRatio`, `hullSymmetryPercent`, `silhouetteFitScore`.
+
+Pressure intent:
+
+- `pressureStatus`, `pressureViolationCodes`;
+- `airlockRoomCount`, `validAirlockRoomCount`;
+- `exteriorAirlockRoomCount`, `internalAirlockRoomCount`;
+- `pressureBoundaryDoorCount`, `invalidPressureDoorCount`;
+- `exteriorHatchCount`, `unresolvedExteriorHatchCount`.
+
+Поля optional для legacy imports. Свежий selector требует их и записывает
+`candidateSelection.schemaVersion = 2`,
+`evaluatorVersion = "grid-candidate-v2"`.
+
+Salt дочернего seed намеренно остаётся `"grid-candidate-v1"`: изменение
+quality evaluation не должно менять само семейство generated candidates.
+`validAirlockRoomCount` пока означает согласованную room-side геометрию; внешний
+шлюз всё ещё может иметь `unresolvedExteriorHatchCount > 0`.

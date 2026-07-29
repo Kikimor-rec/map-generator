@@ -331,8 +331,8 @@ export interface CandidateSelectionObjectives {
 }
 
 export interface CandidateSelectionSummary {
-  schemaVersion: 1
-  evaluatorVersion: 'grid-candidate-v1'
+  schemaVersion: 2
+  evaluatorVersion: 'grid-candidate-v2'
   masterSeed: string
   requestedCandidates: number
   evaluatedCandidates: number
@@ -395,6 +395,24 @@ export interface TTRPGMetrics {
   clusteredJunctionPairs?: number
   ambiguousDoorCount?: number
   doorMetadataMismatchCount?: number
+  facilityStructureStatus?: 'pass' | 'warning' | 'error'
+  facilityStructureViolationCodes?: string[]
+  hullComponentCount?: number
+  structuralVoidCount?: number
+  structuralVoidCollisionCount?: number
+  hullAspectRatio?: number
+  hullSymmetryPercent?: number
+  silhouetteFitScore?: number
+  pressureStatus?: 'pass' | 'warning' | 'error'
+  pressureViolationCodes?: string[]
+  airlockRoomCount?: number
+  validAirlockRoomCount?: number
+  exteriorAirlockRoomCount?: number
+  internalAirlockRoomCount?: number
+  pressureBoundaryDoorCount?: number
+  invalidPressureDoorCount?: number
+  exteriorHatchCount?: number
+  unresolvedExteriorHatchCount?: number
 }
 
 export interface ValidationIssue {

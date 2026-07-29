@@ -87,3 +87,28 @@ repair engine для редактора.
 * geometry overlap/repair для polygon rooms;
 * service-loop и security-bypass repair;
 * props/setpiece-aware validation.
+
+## 10.7 Structural и pressure gates
+
+Во время MapJSON conversion теперь выполняются два дополнительных
+детерминированных read-only отчёта:
+
+- `validateFacilityStructure()` проверяет сохранённую pre-layout hull mask,
+  4-connectivity, выход occupancy за mask, enclosed voids и silhouette metrics;
+- `validatePressureTopology()` проверяет room-side airlock/bulkhead metadata,
+  hull contact внешних шлюзов и различие external terminal/internal transit.
+
+Стабильные error codes включают:
+
+- `EMPTY_FACILITY_ENVELOPE`;
+- `DISCONNECTED_FACILITY_ENVELOPE`;
+- `STRUCTURAL_VOID_COLLISION`;
+- `EXTERIOR_AIRLOCK_OFF_HULL`;
+- `INTERNAL_AIRLOCK_NOT_TRANSIT`;
+- `INVALID_AIRLOCK_DOOR_METADATA`;
+- `INVALID_BULKHEAD_DOOR_METADATA`.
+
+`EXTERIOR_HATCH_NOT_MATERIALIZED` остаётся warning и не ремонтируется
+фиктивным connector. Следующий repair slice должен разделить planning/apply,
+быть одной undoable transaction и не переносить шлюз или создавать новую ветку
+при неоднозначной геометрии.

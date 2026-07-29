@@ -31,6 +31,10 @@ export type GridCandidateHardIssue =
   | 'INVALID_CONNECTOR_GEOMETRY'
   | 'BROKEN_ROOM_PORT_ANCHOR'
   | 'NON_FINITE_OBJECTIVE'
+  | 'FACILITY_STRUCTURE_ERROR'
+  | 'DISCONNECTED_FACILITY_ENVELOPE'
+  | 'STRUCTURAL_VOID_COLLISION'
+  | 'PRESSURE_TOPOLOGY_ERROR'
 
 export interface GridCandidateInput {
   index: number
@@ -126,6 +130,21 @@ export function evaluateGridCandidate(
     if ((metrics.doorMetadataMismatchCount ?? 1) !== 0) {
       hardIssues.push('DOOR_METADATA_MISMATCH')
     }
+    if (metrics.facilityStructureStatus === 'error') {
+      hardIssues.push('FACILITY_STRUCTURE_ERROR')
+    }
+    if ((metrics.hullComponentCount ?? 0) !== 1) {
+      hardIssues.push('DISCONNECTED_FACILITY_ENVELOPE')
+    }
+    if ((metrics.structuralVoidCollisionCount ?? 1) !== 0) {
+      hardIssues.push('STRUCTURAL_VOID_COLLISION')
+    }
+    if (
+      metrics.pressureStatus === 'error' ||
+      (metrics.invalidPressureDoorCount ?? 1) !== 0
+    ) {
+      hardIssues.push('PRESSURE_TOPOLOGY_ERROR')
+    }
   }
 
   if (input.map) {
@@ -142,6 +161,8 @@ export function evaluateGridCandidate(
     ? uniqueSorted([
         ...(metrics?.playabilityViolationCodes ?? []),
         ...(metrics?.aestheticViolationCodes ?? []),
+        ...(metrics?.facilityStructureViolationCodes ?? []),
+        ...(metrics?.pressureViolationCodes ?? []),
       ])
     : uniqueSorted([input.error ?? 'GENERATION_FAILED'])
 
@@ -310,7 +331,12 @@ function hasRequiredMetrics(
     metrics.isolatedRooms !== undefined &&
     metrics.entryBasis !== undefined &&
     metrics.ambiguousDoorCount !== undefined &&
-    metrics.doorMetadataMismatchCount !== undefined
+    metrics.doorMetadataMismatchCount !== undefined &&
+    metrics.facilityStructureStatus !== undefined &&
+    metrics.hullComponentCount !== undefined &&
+    metrics.structuralVoidCollisionCount !== undefined &&
+    metrics.pressureStatus !== undefined &&
+    metrics.invalidPressureDoorCount !== undefined
   )
 }
 
@@ -328,7 +354,11 @@ function calculateObjectives(
 
   const hullMinimum = getHullUseMinimum(archetype, sizeTier)
   const hullUse = metrics.hullUtilizationPercent ?? Number.NaN
-  const hullUseFit = round(clamp01(hullUse / hullMinimum))
+  const hullUtilizationFit = clamp01(hullUse / hullMinimum)
+  const silhouetteFit = clamp01(
+    (metrics.silhouetteFitScore ?? Number.NaN) / 100
+  )
+  const hullUseFit = round(hullUtilizationFit * 0.55 + silhouetteFit * 0.45)
 
   const thresholds = getPlayabilityThresholds(archetype, sizeTier, loopiness)
   const connected = clamp01((metrics.connectedRoomPercent ?? Number.NaN) / 100)
@@ -401,8 +431,8 @@ function buildSelectionSummary(
   const selected = rankedCandidates[0]
   const passedCandidates = rankedCandidates.filter(candidate => candidate.hardPass).length
   return {
-    schemaVersion: 1,
-    evaluatorVersion: 'grid-candidate-v1',
+    schemaVersion: 2,
+    evaluatorVersion: 'grid-candidate-v2',
     masterSeed,
     requestedCandidates,
     evaluatedCandidates: rankedCandidates.length,

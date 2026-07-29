@@ -138,3 +138,27 @@ Current limits:
   rendered, hit-test, and selection geometry therefore remain the same exact H/V path.
 - Door glyphs must visibly interrupt the room/corridor boundary with a clearance
   halo, bright frame, end caps, and semantic type marker.
+
+## 6.10 Partial pressure-topology validation
+
+`validatePressureTopology()` теперь различает роли шлюзовых помещений:
+
+- внешний стыковочный шлюз может оставаться terminal destination;
+- внутренний шлюз обязан иметь минимум две room-side airlock doors и роль
+  `through` или `hub`;
+- каждый airlock threshold обязан быть физическим `AIRLOCK` tile с
+  `pressureBoundary=true` и `interlocked=true`;
+- bulkhead pressure metadata остаётся non-interlocked;
+- внешний шлюз обязан касаться сохранённой границы корпуса.
+
+Ошибки становятся hard gates для свежих grid candidates. Validator read-only:
+он не переносит комнату и не придумывает недостающий corridor.
+
+Текущий MapJSON всё ещё хранит только room-side ports. Поэтому внешний terminal
+airlock с одной корректной внутренней связью получает честное предупреждение
+`EXTERIOR_HATCH_NOT_MATERIALIZED`: vacuum-facing hatch, его port role и общий
+interlock group ещё не сериализуются.
+
+Полный pressure graph
+`vacuum -> outer hatch -> chamber -> inner hatch -> pressurized compartment`
+и runtime pressure states остаются следующей итерацией.

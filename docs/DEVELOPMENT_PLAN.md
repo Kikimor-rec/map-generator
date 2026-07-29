@@ -139,8 +139,8 @@
 | Задача | Статус | Примечания |
 |--------|--------|------------|
 | Целевая спецификация ship/station/outpost | ✅ | `docs/specs/ARCHETYPE_MAP_VISUAL_SPEC.md` |
-| Обязательный facility envelope в схеме и экспорте | ⚠️ | Hull-aware mask→MultiPolygon export, Pixi render, containment/determinism/silhouette tests готовы; legacy bridge пока optional |
-| Structural voids / keepout zones | ⚠️ | Schema/render bridge есть; генератор пока экспортирует `[]`, семантика и размещение впереди |
+| Обязательный facility envelope в схеме и экспорте | ⚠️ | Preserved hull mask→MultiPolygon, Pixi render, 4-connectivity/containment/determinism/silhouette metrics готовы; legacy bridge пока optional |
+| Structural voids / keepout zones | ⚠️ | Enclosed negative space экспортируется и collision gate готов; генерация typed machinery/terrain keepouts впереди |
 | Архетипные circulation strategies | ⚠️ | Ship central longitudinal + 1/2 transverse; circular station closed ring + 4/6/8 spokes; habitat ring + 4 cardinal spokes; clustered outpost primary/optional loop network |
 | Overview + playable deck | ❌ | Связанные представления с общими connector ids |
 | Функциональные props по room role | ❌ | Помещение узнаваемо без подписи |
@@ -165,7 +165,7 @@
 | Функциональное archetype-aware placement | ⚠️ | Active occupancy scorer + outpost module metadata; rectangular bays, без global adjacency solve и props |
 | Валидация связности | ✅ | Active V2: physical-grid connectivity + critical entry reachability |
 | Предупреждения о нелогичности | ⚠️ | Structured read-only playability report готов; UI review/quick-fix ещё нет |
-| Детерминированный best-of-N quality selection | ✅ | Active grid: hard gates, 4/4/3/2/2 pool, Pareto по route/hull/TTRPG, min-aware tie-break, versioned selection metadata |
+| Детерминированный best-of-N quality selection | ✅ | Evaluator v2: connectivity/doors/anchors + hull-mask/pressure gates, 4/4/3/2/2 pool, Pareto по route/hull/TTRPG |
 | Diversity и три финалиста Functional/Balanced/Expressive | ❌ | Нужны gold-set calibration, novelty/topology hash и larger candidate pool |
 
 ---
@@ -233,7 +233,7 @@
 | Размещение дверей на стенах | ✅ | Автоопределение ближайшей стены |
 | Отрисовка дверей | ✅ | Цвет по типу |
 | Автоматические двери при генерации | ✅ | Все room ports получают standard/secure/bulkhead/airlock semantic; MapJSON/editor bridge готов |
-| Pressurization graph и полный двухстворчатый шлюз | ❌ | Есть pressure intent metadata, но нет external second hatch/compartment solve |
+| Pressurization graph и полный двухстворчатый шлюз | ⚠️ | Read-only room-side validator и hard gates готовы; external second hatch, shared interlock group и compartment solve впереди |
 
 ### 6.2 Расширенная система коридоров
 | Задача | Статус | Примечания |

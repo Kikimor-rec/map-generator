@@ -8,6 +8,7 @@
 import { cellsToGeometryUnits } from '../../domain/geometryUnits'
 import type { IntPoint, MultiPolygon, Polygon, Ring } from '../../geometry/types'
 import { TileType, type GridCanvas } from './types'
+import { getEnclosedStructuralVoidMasks } from './facilityValidator'
 
 interface GridPoint {
   readonly x: number
@@ -34,6 +35,9 @@ function pointKey(point: GridPoint): string {
 function isOccupied(canvas: GridCanvas, x: number, y: number): boolean {
   if (x < 0 || x >= canvas.width || y < 0 || y >= canvas.height) {
     return false
+  }
+  if (canvas.originalHullMask) {
+    return canvas.originalHullMask[y]?.[x] ?? false
   }
   return canvas.tiles[y]?.[x]?.type !== TileType.VOID
 }
@@ -282,4 +286,18 @@ export function extractFacilityEnvelope(canvas: GridCanvas): MultiPolygon {
     .filter(record => record.signedArea !== 0)
 
   return assembleMultiPolygon(rings)
+}
+
+/**
+ * Exports enclosed negative-space regions separately from the outer envelope.
+ * These are geometry-level keepouts for rendering and future semantic typing;
+ * the original hull mask remains the authority for collision validation.
+ */
+export function extractStructuralVoids(canvas: GridCanvas): MultiPolygon[] {
+  return getEnclosedStructuralVoidMasks(canvas).map(mask =>
+    extractFacilityEnvelope({
+      ...canvas,
+      originalHullMask: mask,
+    })
+  )
 }

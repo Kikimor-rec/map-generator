@@ -192,6 +192,16 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       ambiguousDoorCount?: number
       doorMetadataMismatchCount?: number
       candidateSelection?: CandidateSelectionSummary
+      facilityStructureStatus?: 'pass' | 'warning' | 'error'
+      facilityStructureViolationCodes?: string[]
+      silhouetteFitScore?: number
+      hullSymmetryPercent?: number
+      structuralVoidCount?: number
+      pressureStatus?: 'pass' | 'warning' | 'error'
+      pressureViolationCodes?: string[]
+      airlockRoomCount?: number
+      validAirlockRoomCount?: number
+      unresolvedExteriorHatchCount?: number
     }
     viewport: { x: number; y: number; zoom: number }
   } | null>(null)
@@ -423,6 +433,16 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 ambiguousDoorCount: metaData.ttrpgMetrics?.ambiguousDoorCount,
                 doorMetadataMismatchCount: metaData.ttrpgMetrics?.doorMetadataMismatchCount,
                 candidateSelection: metaData.candidateSelection,
+                facilityStructureStatus: metaData.ttrpgMetrics?.facilityStructureStatus,
+                facilityStructureViolationCodes: metaData.ttrpgMetrics?.facilityStructureViolationCodes,
+                silhouetteFitScore: metaData.ttrpgMetrics?.silhouetteFitScore,
+                hullSymmetryPercent: metaData.ttrpgMetrics?.hullSymmetryPercent,
+                structuralVoidCount: metaData.ttrpgMetrics?.structuralVoidCount,
+                pressureStatus: metaData.ttrpgMetrics?.pressureStatus,
+                pressureViolationCodes: metaData.ttrpgMetrics?.pressureViolationCodes,
+                airlockRoomCount: metaData.ttrpgMetrics?.airlockRoomCount,
+                validAirlockRoomCount: metaData.ttrpgMetrics?.validAirlockRoomCount,
+                unresolvedExteriorHatchCount: metaData.ttrpgMetrics?.unresolvedExteriorHatchCount,
               },
               viewport: fitViewportForEditorData(editorData),
             })
@@ -1197,7 +1217,61 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                       Pareto {previewData.diagnostics.candidateSelection.paretoRank + 1} · candidate #{previewData.diagnostics.candidateSelection.selectedIndex + 1}
                     </div>
                   </div>
-                )}                {previewData.diagnostics.aestheticStatus && (
+                )}
+                {previewData.diagnostics.facilityStructureStatus && (
+                  <div className={`rounded border p-2 text-[11px] ${
+                    previewData.diagnostics.facilityStructureStatus === 'pass'
+                      ? 'border-green-500/40 bg-green-500/10 text-green-300'
+                      : previewData.diagnostics.facilityStructureStatus === 'error'
+                        ? 'border-red-500/50 bg-red-500/10 text-red-300'
+                        : 'border-amber-500/50 bg-amber-500/10 text-amber-200'
+                  }`}>
+                    <div className="flex items-center justify-between font-medium">
+                      <span>Facility structure</span>
+                      <span className="uppercase">
+                        {previewData.diagnostics.facilityStructureStatus}
+                      </span>
+                    </div>
+                    <div className="mt-1 grid grid-cols-3 gap-x-2 text-space-300">
+                      <span>Silhouette: {previewData.diagnostics.silhouetteFitScore ?? '?'}</span>
+                      <span>Symmetry: {previewData.diagnostics.hullSymmetryPercent ?? '?'}%</span>
+                      <span>Voids: {previewData.diagnostics.structuralVoidCount ?? '?'}</span>
+                    </div>
+                    {(previewData.diagnostics.facilityStructureViolationCodes?.length ?? 0) > 0 && (
+                      <div className="mt-1 text-space-400">
+                        {previewData.diagnostics.facilityStructureViolationCodes?.join(' / ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {previewData.diagnostics.pressureStatus && (
+                  <div className={`rounded border p-2 text-[11px] ${
+                    previewData.diagnostics.pressureStatus === 'pass'
+                      ? 'border-green-500/40 bg-green-500/10 text-green-300'
+                      : previewData.diagnostics.pressureStatus === 'error'
+                        ? 'border-red-500/50 bg-red-500/10 text-red-300'
+                        : 'border-amber-500/50 bg-amber-500/10 text-amber-200'
+                  }`}>
+                    <div className="flex items-center justify-between font-medium">
+                      <span>Pressure intent</span>
+                      <span className="uppercase">{previewData.diagnostics.pressureStatus}</span>
+                    </div>
+                    <div className="mt-1 grid grid-cols-2 gap-x-2 text-space-300">
+                      <span>
+                        Airlocks: {previewData.diagnostics.validAirlockRoomCount ?? '?'}/{previewData.diagnostics.airlockRoomCount ?? '?'} valid
+                      </span>
+                      <span>
+                        Outer hatches pending: {previewData.diagnostics.unresolvedExteriorHatchCount ?? '?'}
+                      </span>
+                    </div>
+                    {(previewData.diagnostics.pressureViolationCodes?.length ?? 0) > 0 && (
+                      <div className="mt-1 text-space-400">
+                        {previewData.diagnostics.pressureViolationCodes?.join(' / ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {previewData.diagnostics.aestheticStatus && (
                   <div className={`rounded border p-2 text-[11px] ${
                     previewData.diagnostics.aestheticStatus === 'pass'
                       ? 'border-green-500/40 bg-green-500/10 text-green-300'

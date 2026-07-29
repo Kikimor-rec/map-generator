@@ -149,6 +149,23 @@ zoning базы и polygon room editing ещё не реализованы.
 - `junctions[]`
 
 Поле `geometry` остаётся optional, чтобы старые проекты продолжали
-импортироваться. Текущий генератор заполняет `facilityEnvelope`, но
-`structuralVoids` пока экспортирует как пустой массив; типы и render path уже
-готовы, семантическая генерация voids/keepouts — отдельный незавершённый этап.
+импортироваться. Текущий генератор заполняет `facilityEnvelope` из сохранённой
+исходной hull mask. Замкнутые области negative space дополнительно
+экспортируются в `structuralVoids`; генерация типизированных machinery/terrain
+keepouts остаётся следующим этапом.
+
+## 5.9 Preserved hull mask и structural integrity
+
+Active V2 сохраняет `GridCanvas.originalHullMask` сразу после `carveHull()` и
+до размещения circulation/rooms. Read-only validator проверяет:
+
+- непустой и 4-связный facility footprint;
+- отсутствие поздних `FLOOR`, `CORRIDOR`, `JUNCTION`, `DOOR` и `AIRLOCK` за
+  пределами исходной mask;
+- количество замкнутых structural voids;
+- aspect ratio, bilateral symmetry и archetype-specific silhouette fit.
+
+`facilityEnvelope` извлекается из сохранённой mask, поэтому ошибочная поздняя
+мутация не меняет внешний контракт. Этот срез даёт validation/export, но пока
+не добавляет subtype-specific dock appendages, machinery masses или ручной
+modular hull editor.

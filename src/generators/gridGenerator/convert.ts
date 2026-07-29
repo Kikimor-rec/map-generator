@@ -26,7 +26,9 @@ import { calculateGridMetrics } from './metrics'
 import { validateTTRPGPlayability } from './playabilityValidator'
 import { validateMapAesthetics } from './aestheticValidator'
 import { GEOMETRY_UNITS_PER_CELL } from '../../domain/geometryUnits'
-import { extractFacilityEnvelope } from './geometry'
+import { extractFacilityEnvelope, extractStructuralVoids } from './geometry'
+import { validateFacilityStructure } from './facilityValidator'
+import { validatePressureTopology } from './pressureValidator'
 
 // ============================================================================
 // MAIN CONVERSION
@@ -69,7 +71,7 @@ export function convertToMapJSON(
         geometry: {
           unitsPerCell: GEOMETRY_UNITS_PER_CELL,
           facilityEnvelope: extractFacilityEnvelope(canvas),
-          structuralVoids: [],
+          structuralVoids: extractStructuralVoids(canvas),
         },
       },
     ],
@@ -602,6 +604,8 @@ function buildMeta(
     requestedLoopiness: request.loopiness,
   })
   const aesthetics = validateMapAesthetics(canvas, placements)
+  const facility = validateFacilityStructure(canvas)
+  const pressure = validatePressureTopology(canvas, placements)
   return {
     name: `${request.archetype.charAt(0).toUpperCase() + request.archetype.slice(1)} ${request.subtype}`,
     archetype: request.archetype,
@@ -645,6 +649,24 @@ function buildMeta(
       clusteredJunctionPairs: aesthetics.metrics.clusteredJunctionPairCount,
       ambiguousDoorCount: aesthetics.metrics.ambiguousDoorCount,
       doorMetadataMismatchCount: aesthetics.metrics.doorMetadataMismatchCount,
+      facilityStructureStatus: facility.status,
+      facilityStructureViolationCodes: facility.violations.map(issue => issue.code),
+      hullComponentCount: facility.metrics.hullComponentCount,
+      structuralVoidCount: facility.metrics.structuralVoidCount,
+      structuralVoidCollisionCount: facility.metrics.structuralVoidCollisionCount,
+      hullAspectRatio: facility.metrics.hullAspectRatio,
+      hullSymmetryPercent: facility.metrics.hullSymmetryPercent,
+      silhouetteFitScore: facility.metrics.silhouetteFitScore,
+      pressureStatus: pressure.status,
+      pressureViolationCodes: pressure.violations.map(issue => issue.code),
+      airlockRoomCount: pressure.metrics.airlockRoomCount,
+      validAirlockRoomCount: pressure.metrics.validAirlockRoomCount,
+      exteriorAirlockRoomCount: pressure.metrics.exteriorAirlockRoomCount,
+      internalAirlockRoomCount: pressure.metrics.internalAirlockRoomCount,
+      pressureBoundaryDoorCount: pressure.metrics.pressureBoundaryDoorCount,
+      invalidPressureDoorCount: pressure.metrics.invalidPressureDoorCount,
+      exteriorHatchCount: pressure.metrics.exteriorHatchCount,
+      unresolvedExteriorHatchCount: pressure.metrics.unresolvedExteriorHatchCount,
     },
     tags: [
       request.archetype,

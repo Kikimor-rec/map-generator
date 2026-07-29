@@ -46,6 +46,11 @@ export interface GridCanvas {
   archetype: Archetype
   /** Size tier */
   sizeTier: SizeTier
+  /**
+   * Immutable footprint captured immediately after hull carving.
+   * Later FLOOR/CORRIDOR mutations must remain inside this mask.
+   */
+  originalHullMask?: readonly (readonly boolean[])[]
 }
 
 export interface Point {

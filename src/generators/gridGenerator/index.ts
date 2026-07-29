@@ -221,6 +221,22 @@ export {
   type AestheticViolation,
 } from './aestheticValidator'
 export {
+  captureOriginalHullMask,
+  getEnclosedStructuralVoidMasks,
+  validateFacilityStructure,
+  type FacilityMetrics,
+  type FacilityReport,
+  type FacilityViolation,
+  type FacilityViolationCode,
+} from './facilityValidator'
+export {
+  validatePressureTopology,
+  type PressureMetrics,
+  type PressureReport,
+  type PressureViolation,
+  type PressureViolationCode,
+} from './pressureValidator'
+export {
   deriveGridCandidateSeed,
   evaluateGridCandidate,
   generateBestGridMap,

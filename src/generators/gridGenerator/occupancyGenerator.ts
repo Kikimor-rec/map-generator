@@ -35,6 +35,7 @@ import {
   planRoomCirculation,
   type RoomCirculationPlan,
 } from './roomCirculation'
+import { captureOriginalHullMask } from './facilityValidator'
 
 interface CorridorRun {
   id: string
@@ -114,6 +115,7 @@ export function generateGridMapV2(options: GridGeneratorOptions = {}): GridGener
       rng,
       { loopiness }
     )
+    canvas.originalHullMask = captureOriginalHullMask(canvas)
     const facilityBounds = getFacilityBounds(canvas)
     timing.hull = performance.now() - hullStart
 
