@@ -488,9 +488,6 @@ export function convertToEditorFormat(
   const physicalConnectors = connectorsWithRepresentation.filter(
     entry => entry.representation === 'physical-topology-edge-v1'
   )
-  const physicalConnectorIds = new Set(
-    physicalConnectors.map(entry => entry.connector.id)
-  )
   const physicalRoomPortKeys = new Set<string>()
 
   for (const { connector } of physicalConnectors) {
@@ -505,11 +502,16 @@ export function convertToEditorFormat(
   const rooms: Room[] = deck.rooms.map(layoutRoom => {
     const roomType = mapRoomTypeId(layoutRoom.roomType)
     const roomDoors: Door[] = layoutRoom.ports
-      .filter(port =>
-        physicalRoomPortKeys.has(`${layoutRoom.id}:${port.id}`) ||
-        (port.connectorId !== null && physicalConnectorIds.has(port.connectorId)) ||
-        (port.connectorId === null && physicalConnectors.length > 0)
-      )
+      .filter(port => {
+        const hasSemanticDoorData =
+          port.doorType !== undefined ||
+          port.pressureRole !== undefined ||
+          port.pressureBoundary !== undefined ||
+          port.interlockGroupId !== undefined ||
+          port.exterior !== undefined
+        return physicalRoomPortKeys.has(`${layoutRoom.id}:${port.id}`) ||
+          hasSemanticDoorData
+      })
       .map(port => {
           const doorType = getDoorType(port.doorType ?? 'standard')
           return {

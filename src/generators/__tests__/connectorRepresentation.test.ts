@@ -259,6 +259,84 @@ describe('connector representation editor adapter', () => {
     ])
   })
 
+  it('keeps an unanchored classified physical room port on a mixed deck', () => {
+    const rooms = [
+      room('room-a', 0, [{
+        id: 'unanchored-physical-port',
+        x: 100,
+        y: 70,
+        wall: 'right',
+        connectorId: 'corridor-33-34',
+        doorType: 'bulkhead',
+      }]),
+      room('room-b', 200, []),
+      room('room-c', 400, []),
+      room('room-d', 600, []),
+    ]
+    const connectors: LayoutConnector[] = [
+      {
+        id: 'physical-edge',
+        representation: 'physical-topology-edge-v1',
+        fromRoomId: 'room-a',
+        toRoomId: 'room-b',
+        kind: 'corridor',
+        path: [{ x: 100, y: 50 }, { x: 200, y: 50 }],
+        width: 22,
+      },
+      {
+        id: 'room-route-link',
+        representation: 'room-route-v1',
+        fromRoomId: 'room-c',
+        toRoomId: 'room-d',
+        kind: 'corridor',
+        path: [{ x: 500, y: 50 }, { x: 600, y: 50 }],
+        width: 22,
+      },
+    ]
+
+    const editor = convertToEditorFormat(mapWith(rooms, connectors))
+
+    expect(editor.rooms.flatMap(candidate => candidate.doors)).toContainEqual(
+      expect.objectContaining({
+        id: 'door-unanchored-physical-port',
+        type: 'blast',
+      })
+    )
+    expect(editor.doors.map(door => door.id)).toEqual([
+      'door-room-route-link-start',
+      'door-room-route-link-end',
+    ])
+  })
+
+  it('keeps a semantic exterior hatch on a deck with no physical edges', () => {
+    const rooms = [
+      room('airlock-room', 0, [{
+        id: 'outer-hatch',
+        x: 0,
+        y: 50,
+        wall: 'left',
+        connectorId: null,
+        doorType: 'airlock',
+        pressureRole: 'outer-hatch',
+        pressureBoundary: true,
+        interlockGroupId: 'interlock-airlock-room',
+        fromCompartmentId: 'outside',
+        toCompartmentId: 'airlock-compartment',
+        exterior: true,
+      }]),
+    ]
+
+    const editor = convertToEditorFormat(mapWith(rooms, []))
+
+    expect(editor.rooms[0].doors).toContainEqual(expect.objectContaining({
+      id: 'door-outer-hatch',
+      type: 'airlock',
+      pressureRole: 'outer-hatch',
+      exterior: true,
+    }))
+    expect(editor.doors).toEqual([])
+  })
+
   it('keeps discriminator-free corridor-edge grid JSON readable', () => {
     const rooms = [
       room('room-a', 0, []),
