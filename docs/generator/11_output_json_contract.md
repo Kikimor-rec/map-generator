@@ -1,8 +1,9 @@
 # 11 — Выходной MapJSON контракт
 
-Этот раздел описывает текущий legacy-compatible MapJSON. Параллельно введён
-foundation `MapDocumentV2` с canonical polygon types и fixed-point units, но
-полная миграция persistence/import/export на него ещё не завершена.
+Этот раздел описывает текущий legacy-compatible `MapJSON`, который остаётся
+production bridge после Phase 1. `MapDocumentV2`, runtime parsing, migrations и
+`importGeneratedMap` остаются Phase 2; текущая production generation не выдаёт
+`MapDocumentV2` и не меняет версию документа.
 
 Существующие координаты rooms/connectors остаются в прежнем формате. Только
 optional `deck.geometry` использует canonical geometry units:
@@ -94,6 +95,34 @@ tile mask и сохраняет его через этот bridge. `structuralVo
 - `pressurizationBoundary`
 - `isSecret`
 - `layer`: "main"|"ventilation"|"service"|"cables"|"security"
+
+### 11.5.1 Connector representation
+
+Every new connector serializes:
+
+```ts
+representation:
+  | "physical-topology-edge-v1"
+  | "room-route-v1"
+```
+
+`physical-topology-edge-v1` identifies graph edges derived from occupancy
+tiles. `room-route-v1` identifies historical room-to-room paths. Fresh
+occupancy output always writes the former; the retained compatibility generator
+always writes the latter.
+
+The property remains optional in `LayoutConnector` only for old JSON that
+predates the discriminator. During import:
+
+1. an explicit value always wins;
+2. a missing value with historical `corridor-edge-*` ID falls back to physical
+   topology;
+3. every other missing value falls back to room route.
+
+Normalization is per connector, so mixed decks retain both representations.
+Only room routes receive legacy coalescing and endpoint-door synthesis. The ID
+prefix is a historical fallback, not a naming requirement for new physical
+connectors.
 
 ## 11.6 Junction
 - `id`
@@ -205,3 +234,19 @@ quality evaluation не должно менять само семейство ge
 compartment, общий interlock и корректный внешний люк. Selector не принимает
 кандидат с `unresolvedExteriorHatchCount > 0`. Legacy-документ без
 `deck.pressure` сохраняет прежнюю room-side проверку и warning совместимости.
+
+## 11.11 Production profile and selection metadata
+
+`meta.candidateSelection` is written for maps returned by the production
+facade. Its `requestedCandidates` follows the exact Draft/Standard/Polish
+profile table; it also records evaluated/passed/rejected counts, master and
+selected seeds, selected numeric index, Pareto rank, balanced score, three
+objectives, and stable reason codes.
+
+The production worker transports the same document only as:
+
+```ts
+{ type: "COMPLETE", requestId, format: "map-json-v1", map }
+```
+
+There is no alternate `bestCandidate` document shape.

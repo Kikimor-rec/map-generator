@@ -67,25 +67,29 @@ Preview не блокирует Apply: пользователь сохраняе
 Все пороги доступны через `getAestheticThresholds` и могут быть переопределены
 в unit-тестах или будущих style profiles.
 
-## Следующие quality gates
+Aesthetic warning alone does not block a map. Production selection separately
+applies the structural hard gates below; a hard-rejected candidate cannot be
+returned as the selected production map.
 
-1. Контраст и минимальный экранный размер дверей на fit-to-view.
-2. Векторная гладкость силуэта и число коротких ступеней корпуса.
-3. Распределение комнат по видимому корпусу и осмысленные reserved volumes.
-4. Авторитетный внешний ingress вместо эвристики по названию помещения.
-5. Сравнение нескольких кандидатов одного seed family по эстетическому отчёту.
+## Production selection profiles
 
-## Реализованный best-of-N отбор
+Draft, Standard и Polish — это candidate-selection effort profiles над одним
+occupancy/grid engine, а не разные генераторы.
 
-Стандартная grid-генерация больше не возвращает первый случайный результат. Для одного master seed она детерминированно строит ограниченный пул кандидатов:
+| Profile | XS | SM | MD | LG | XL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Draft | 1 | 1 | 1 | 1 | 1 |
+| Standard | 4 | 4 | 3 | 2 | 2 |
+| Polish | 8 | 8 | 6 | 4 | 4 |
 
-- `XS`: 4;
-- `SM`: 4;
-- `MD`: 3;
-- `LG`: 2;
-- `XL`: 2.
+Default profile — Standard. Каждый профиль, включая Draft с одним вариантом,
+проходит тот же hard-gated selector и требует хотя бы один hard-pass.
 
-Это responsive-профиль первого этапа. Целевой research-профиль `24–48` кандидатов остаётся будущей задачей после сбора timing и pass-rate по корпусу seed.
+## Реализованный deterministic best-of-N отбор
+
+Для одного master seed production facade детерминированно строит ограниченный
+profile-specific pool occupancy candidates. `quality/pipeline.ts` не участвует
+в production generation или отборе.
 
 ### Hard gates
 
@@ -119,7 +123,7 @@ Child seed вычисляется как `hash(masterSeed, "grid-candidate-v1", 
 
 Worker делает yield между кандидатами и проверяет `AbortSignal`, поэтому Cancel останавливает перебор до следующего варианта и не отправляет `COMPLETE`.
 
-### Текущие ограничения
+### Дополнительные structural/pressure gates
 
 Evaluator v2 дополнительно hard-rejects:
 
@@ -136,6 +140,16 @@ Evaluator v2 дополнительно hard-rejects:
 `hullUseFit` теперь сочетает usable hull occupancy (55%) и измеренный
 archetype silhouette fit (45%). Слабая узнаваемость остаётся soft warning, а не
 запретом необычной карты.
+
+### Следующие quality gates
+
+1. Контраст и минимальный экранный размер дверей на fit-to-view.
+2. Векторная гладкость силуэта и число коротких ступеней корпуса.
+3. Распределение комнат по видимому корпусу и осмысленные reserved volumes.
+4. Gold-set classifier узнаваемости без подписей.
+5. Novelty/topology hash и diversity относительно предыдущих результатов.
+
+### Текущие ограничения
 
 Остаются ограничения:
 

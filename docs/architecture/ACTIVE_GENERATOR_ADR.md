@@ -1,111 +1,173 @@
 # ADR: Active Production Generator
 
-- Status: Accepted
+- Status: Accepted and implemented
 - Date: 2026-07-29
+- Implementation reconciled: 2026-07-30
 
 ## Context
 
-The repository currently exposes more than one generation path. The public
-generator facade accepts `engine: 'grid' | 'legacy'`, the generation UI exposes
-an independent quality-pipeline toggle but no engine-selection control. Its
-stale `generatorEngine` state is initialized to `grid` and always sends grid in
-the payload because `setGeneratorEngine` is never called. The worker and public
-facade still accept legacy dispatch. Grid is already the default, but default selection alone
-does not establish architectural ownership.
+The repository historically exposed three competing ways to generate geometry:
+the occupancy/grid generator, an older room-program/topology/layout pipeline,
+and `quality/pipeline.ts`. The product UI and worker could reach more than one
+of those paths, and connector shape was inferred from connector IDs.
 
-This ADR defines the target ownership contract for production development. It
-does not claim that the current runtime dispatch has already been removed.
+Phase 1 removes that production ambiguity without deleting the historical
+implementations needed for regression comparison and old-document adaptation.
 
 ## Decision
 
-The occupancy-grid generator is the only production engine target.
-`src/generators/gridGenerator/occupancyGenerator.ts` owns production map
-generation, with deterministic best-of-N selection in
-`src/generators/gridGenerator/candidateSelector.ts`.
+The occupancy/grid engine is the only product generation engine.
+`src/generators/gridGenerator/occupancyGenerator.ts` owns geometry generation:
+the tile canvas is the source of truth, and exported topology/editor geometry
+is derived from carved occupancy.
 
-`src/generators/quality/pipeline.ts` is not a second production generator
-target. Phase 1 may extract reusable validators and scoring from it for use by
-the occupancy-grid engine. After that extraction, its independent generation
-path is retired.
+`src/generators/generator.ts` is the sole production facade:
 
-The legacy generators are retained only for import compatibility and regression
-comparison. New production behavior must not be added to them.
+```ts
+generateMap(options: GeneratorOptions): GenerationResult
+generateMapAsync(
+  options: GeneratorOptions,
+  hooks?: CandidateGenerationHooks,
+): Promise<GenerationResult>
+```
 
-`MapDocumentV2`, defined in `src/domain/mapDocumentV2.ts`, is the target
-canonical generated document. Current `MapJSON` and editor-shaped results are
-transitional boundary formats until Phase 2 completes and extends
-`MapDocumentV2` and adds `importGeneratedMap`.
+Both facade functions always call the occupancy candidate selector. There is no
+production engine switch. If `qualityProfile` is omitted, the facade uses
+`standard`.
 
-## Current paths and ownership
+Draft, Standard, and Polish are deterministic candidate-selection effort
+profiles, not different algorithms:
 
-| Path | Current state | Ownership under this decision |
-| --- | --- | --- |
-| `src/generators/generator.ts` | Generator facade; defaults to grid but still accepts `grid` or `legacy` through `engine` and returns `MapJSON`. | Transitional production entry point. Phase 1 stops production dispatch to legacy; Phase 2 adapts its output to `MapDocumentV2` through `importGeneratedMap`. |
-| `src/generators/gridGenerator/occupancyGenerator.ts` | Occupancy-first implementation; carved cells are the source of truth and graph/editor geometry is derived from them. | The only production generation engine target. |
-| `src/generators/gridGenerator/candidateSelector.ts` | Runs deterministic grid candidates, applies hard validation gates, and ranks passing candidates. | Production selection owned by the occupancy-grid engine, not a separate engine. |
-| `src/generators/quality/pipeline.ts` | Independently generates candidates when the quality branch is selected. | Source for validator/scoring extraction only; retire the independent generation path after extraction. |
-| `src/generators/mapGenerator.ts` | Older standalone BSP/graph `MapGenerator` API, still re-exported from the generator index. | Import/regression compatibility only. |
-| `src/ui/panels/GenerationPanel.tsx` | Exposes an independent quality-pipeline toggle. Its stale `generatorEngine` state and payload field always use `grid`; there is no engine-selection control or call to `setGeneratorEngine`. | Transitional UI. Phase 1 removes the stale engine field and production choices that bypass the occupancy-grid engine. |
-| `src/workers/generation.worker.ts` | Dispatches to the quality pipeline, best-of-N grid selection, or `generateMap`, which can still select legacy. | Transitional dispatch. Phase 1 narrows it to occupancy-grid generation plus extracted validation/scoring. |
-| `src/domain/mapDocumentV2.ts` | Defines the renderer-neutral, JSON-safe `MapDocumentV2`; the generator does not yet produce it. | Target canonical document contract. Phase 2 owns its completion and extension plus the `importGeneratedMap` boundary. |
+| Profile | XS | SM | MD | LG | XL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Draft | 1 | 1 | 1 | 1 | 1 |
+| Standard | 4 | 4 | 3 | 2 | 2 |
+| Polish | 8 | 8 | 6 | 4 | 4 |
+
+Every profile requires a hard-pass candidate. Selection uses the existing
+policy in `gridGenerator/candidateSelector.ts`, in this order:
+
+1. reject candidates that fail generation, semantic/structural/pressure gates,
+   connector geometry and anchor checks, or finite-objective checks;
+2. assign Pareto fronts over `routeClarity`, `hullUseFit`, and `ttrpgChoice`;
+3. use the min-aware balanced score
+   `0.5 * mean(objectives) + 0.5 * min(objectives)` within a front;
+4. use numeric `candidateIndex` as the final tie-break.
+
+An explicit seed plus the same request/profile produces the same candidate
+family, normalized document, and selected candidate. Draft still goes through
+the same hard-gated selector with one candidate.
+
+## Product facade, worker, and UI
+
+The product UI and worker share one typed route:
+
+```text
+GenerationPanel
+  -> GenerationWorkerRequest { type: "GENERATE", requestId, options }
+  -> generation.worker.ts
+  -> generationRuntime.ts
+  -> generateMapAsync
+  -> occupancy candidate selector
+  -> GenerationWorkerResponse {
+       type: "COMPLETE",
+       format: "map-json-v1",
+       map
+     }
+```
+
+`generationProtocol.ts` rejects obsolete `engine`, `useQuality`, and
+`qualityMode` payload fields. The UI presents only Draft, Standard, and Polish.
+Gallery variants use the same `generateMap` facade with Draft and derived
+seeds, then use the occupancy candidate ranking helper.
+
+## Compatibility boundary
+
+Historical generation remains available only through
+`src/generators/compatibility/index.ts`:
+
+- `generateLegacyMapForRegression`;
+- the old `MapGenerator` and presets;
+- retained quality-pipeline entry points.
+
+These APIs are compatibility/regression tools, not product engines. They are
+not re-exported by `src/generators/index.ts`, and production code must not add
+features to them.
+
+## Machine-enforced import ownership
+
+`npm run check:generator-boundary` traverses TypeScript imports and re-exports
+from both production entry points:
+
+- `src/ui/panels/GenerationPanel.tsx`;
+- `src/workers/generation.worker.ts`.
+
+The check fails with the full import chain if either entry point can reach the
+quality pipeline, legacy pipeline, old `MapGenerator`, old layout/topology, or
+either skeleton generator. Shared semantic modules such as `roomProgram` are
+allowed. The boundary command is part of `npm run check`.
+
+## Connector representation
+
+Newly generated connectors always serialize one explicit representation:
+
+- `physical-topology-edge-v1` for occupancy-derived physical graph edges;
+- `room-route-v1` for historical room-to-room routes.
+
+`normalizeConnectorRepresentation()` applies the compatibility rules:
+
+1. an explicit representation always wins, regardless of ID;
+2. only a discriminator-free historical ID beginning with `corridor-edge-`
+   falls back to `physical-topology-edge-v1`;
+3. every other discriminator-free connector falls back to `room-route-v1`.
+
+The editor adapter normalizes each connector independently. Mixed decks may
+therefore contain both representations: physical edges remain separate graph
+edges, while only room routes receive legacy coalescing and endpoint-door
+adaptation. No deck-wide classification is permitted.
+
+The optional type field exists only so historical discriminator-free JSON can
+still be read. Production writers must always include it.
+
+## Canonical document boundary
+
+Phase 1 continues to return the existing `MapJSON` bridge. Completing and
+extending `src/domain/mapDocumentV2.ts`, adding runtime parsing/migrations, and
+introducing `importGeneratedMap` remain Phase 2 work. Phase 1 does not change
+document versions or claim that `MapDocumentV2` is already the production
+format.
 
 ## Invariants
 
-- There is one production generation owner: the occupancy-grid engine.
-- Occupancy cells are generation truth; corridors, connectivity graphs, and
-  render/editor geometry are derived representations.
-- Candidate selection, validation, and scoring may reject or rank generated
-  maps, but they do not constitute another production engine.
-- Extracted quality validators and scoring must consume occupancy-grid output or
-  its canonical document, rather than regenerate competing geometry.
-- Legacy generation is limited to import compatibility and regression
-  comparison; it is not a feature-development target.
-- `MapDocumentV2` is the canonical target. `MapJSON`, editor project objects,
-  and renderer data are adapters or migration formats, not competing sources of
-  truth.
-- Seeded production generation and candidate selection remain deterministic.
-
-## Phase 1 migration
-
-Phase 1 is limited to production-path consolidation. It will:
-
-1. extract any retained validators and scoring from
-   `src/generators/quality/pipeline.ts` and apply them to occupancy-grid
-   candidates;
-2. remove the production `engine: 'grid' | 'legacy'` and independent-quality
-   dispatch from `src/generators/generator.ts`,
-   `src/ui/panels/GenerationPanel.tsx`, and
-   `src/workers/generation.worker.ts`;
-3. isolate legacy generation behind explicit import/regression compatibility
-   boundaries; and
-4. retire the remaining independent quality-generation implementation.
-
-Completion and extension of `MapDocumentV2`, including the
-`importGeneratedMap` boundary, belongs to Phase 2. Production dispatch removal
-belongs to Phase 1. This Phase 0 ADR changes ownership and future direction
-only; it deliberately makes no runtime code change.
+- There is one production geometry owner: the occupancy/grid engine.
+- Candidate selection, validation, and scoring rank occupancy output; they do
+  not regenerate competing geometry.
+- UI and worker use the same facade and typed request/response protocol.
+- Quality and legacy generators are compatibility/regression-only.
+- New connectors carry an explicit representation.
+- Historical connector inference exists only in the compatibility normalizer
+  and is applied per connector.
+- Seeded generation and candidate selection remain deterministic.
 
 ## Consequences
 
 - Production fixes and features have one destination.
-- Quality work can be reused without preserving a parallel geometry generator.
-- Import and regression coverage can remain available while production
-  ambiguity is removed.
-- Phase 2 must provide the import adapter during the move from current
-  `MapJSON` and editor-shaped results to `MapDocumentV2`.
-- Until Phase 1 completes, the UI and worker can still reach non-target paths;
-  that is known transitional state, not authorization for two production
-  engines.
+- Profiles can trade compute for selection effort without changing geometry
+  architecture.
+- Historical generators and old JSON remain testable without being reachable
+  from product entry points.
+- Phase 2 can introduce the canonical document/import boundary on top of one
+  stable production generation path.
 
 ## Rejected alternatives
 
-- **Keep grid and legacy as coequal production engines.** This duplicates
-  behavior, testing, and bug ownership.
-- **Keep the quality pipeline as a separate production engine.** Useful
-  validation and scoring do not require an independent generation path.
-- **Treat `MapJSON` or editor state as the canonical target.** Both couple
-  generation to transitional consumers; `MapDocumentV2` provides the
-  renderer-neutral target.
-- **Delete all non-grid dispatch in Phase 0.** That would mix a runtime migration
-  with the ground-truth documentation task and could remove compatibility before
-  Phase 1 supplies explicit boundaries.
+- **Keep grid and legacy as coequal product engines.** This duplicates behavior,
+  tests, and bug ownership.
+- **Keep the quality pipeline as a second product engine.** Reusable validation
+  and scoring do not require competing geometry generation.
+- **Treat profile names as algorithm choices.** Draft/Standard/Polish vary only
+  deterministic candidate count.
+- **Infer every connector from its ID.** IDs are not a reliable format
+  discriminator; fallback is retained only for old discriminator-free data.
+- **Implement `MapDocumentV2` during Phase 1.** That would combine production
+  routing consolidation with the separate canonical import/migration boundary.

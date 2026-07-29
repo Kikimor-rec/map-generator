@@ -180,3 +180,34 @@ Rules:
 This is a static topology, not runtime decompression simulation. The main
 facility is still one coarse pressurized compartment; bulkhead-separated
 component solving, door states, damage and gas propagation remain future work.
+
+## 6.12 Serialized connector representation
+
+`LayoutConnector.representation` distinguishes two persisted geometries:
+
+- `physical-topology-edge-v1` — an occupancy-derived physical graph edge;
+- `room-route-v1` — a historical room-to-room route.
+
+Fresh occupancy conversion always writes `physical-topology-edge-v1`.
+The retained historical generator always writes `room-route-v1`. The field is
+optional in the TypeScript bridge only so discriminator-free historical JSON
+can still be imported; all new documents must serialize it explicitly.
+
+`normalizeConnectorRepresentation()` is the single historical fallback:
+
+1. an explicit representation always wins, even when the connector ID suggests
+   another representation;
+2. a missing representation falls back to
+   `physical-topology-edge-v1` only for an old `corridor-edge-*` ID;
+3. any other missing representation falls back to `room-route-v1`.
+
+The editor adapter applies this rule to each connector independently. A mixed
+deck may therefore contain physical and room-route connectors at the same
+time. Physical edges remain separate graph edges and preserve semantic
+room-port doors. Only room routes receive legacy coalescing, room attachment,
+and generated endpoint-door adaptation. A deck-wide prefix check or
+`every(...)` classification is invalid.
+
+This discriminator belongs to the current `MapJSON` compatibility bridge.
+Migration to `MapDocumentV2` and its canonical import boundary remains Phase 2;
+Phase 1 does not change document versions or editable corridor behavior.

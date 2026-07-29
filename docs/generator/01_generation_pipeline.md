@@ -1,52 +1,153 @@
-# Generation Pipeline (clean draft)
+# 01 — Production generation pipeline
 
-> **Current status (2026-07-29):** The occupancy-grid engine is the only
-> production target. The descriptive stages below are legacy
-> historical/compatibility material, not a second production engine.
-> `quality/pipeline.ts` may contribute extracted validation/scoring only; Phase
-> 1 owns extraction, retirement of its independent generation path, and removal
-> of legacy/quality production dispatch. See
-> [ADR: Active Production Generator](../architecture/ACTIVE_GENERATOR_ADR.md).
+> **Current status (2026-07-30):** the occupancy/grid engine is the only
+> product generation engine. Historical generator descriptions belong to the
+> explicit compatibility surface, not this production pipeline.
 
-This replaces the corrupted version and matches the current code paths in `src/generators`.
+See [ADR: Active Production Generator](../architecture/ACTIVE_GENERATOR_ADR.md).
 
-## High-Level Stages
-1) **Input**  
-   - `{ seed, archetype, subtype, styleProfile, sizeTier, loopiness, danger }`.
+## 1. Product entry point
 
-2) **Room Program** (`generateRoomProgram`)  
-   - Expands archetype/subtype into a list of rooms with importance, tags, and zone distribution.  
-   - Validation emits warnings; generator continues.
+All single-map product generation calls one facade:
 
-3) **Topology Graph** (`generateTopology`)  
-   - Connects rooms according to `loopiness` (more loops => higher connectivity).  
-   - Connector kinds chosen from room tags (bulkhead/airlock/service etc.).
+```ts
+generateMap(options: GeneratorOptions): GenerationResult
+generateMapAsync(
+  options: GeneratorOptions,
+  hooks?: CandidateGenerationHooks,
+): Promise<GenerationResult>
+```
 
-4) **Layout** (`generateLayout`)  
-   - Places rooms on a grid (40px cell).  
-   - Ensures non-overlap; respects rough zone grouping.
+Both functions resolve a quality profile and call the occupancy candidate
+selector. Neither function dispatches to the old layout/topology generator or
+to `quality/pipeline.ts`.
 
-5) **Routing**  
-   - Standard generator: sparse router + grid fallback, width=1.2 tiles, snap+simplify.  
-   - Coalesce always on (`tolerancePx=10`, `minSharedLength=20`).  
-   - Doors created at connector endpoints.
+## 2. Selection profiles
 
-6) **Validation** (optional)  
-   - Structural checks on program/topology/layout (warnings only in current build).
+Draft, Standard, and Polish select how many deterministic occupancy candidates
+are evaluated. They do not select different geometry implementations.
 
-7) **MapJSON**  
-   - Deck list with rooms, connectors, junctions, metadata, and grid settings.
+| Profile | XS | SM | MD | LG | XL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Draft | 1 | 1 | 1 | 1 | 1 |
+| Standard | 4 | 4 | 3 | 2 | 2 |
+| Polish | 8 | 8 | 6 | 4 | 4 |
 
-8) **Editor Conversion** (`convertToEditorFormat`)  
-   - Produces `rooms`, `corridors` (with `segments`/`segmentIds`), `doors`.  
-   - Applies coalesce again for editor friendliness.
+The default is Standard. Every profile, including one-candidate Draft, requires
+a hard-pass candidate.
 
-## Quality Pipeline Differences
-- Same room/topology/layout inputs.  
-- Routing uses quality presets, candidates, and refinement loop.  
-- Ports limited to top 2 per room; segments snapped to half-grid.  
-- Coalesce + simplify + junction normalization enforced.
+## 3. One occupancy attempt
 
-## Known Gaps
-- Corridor creation still needs tuning for some seeds (see dev plan).  
-- Locked waypoints, incremental reroute, and polished multi-attempt mode are pending.
+For each candidate, `generateGridMapV2()`:
+
+1. normalizes seed, archetype, subtype, style, size, loopiness, and danger;
+2. creates the seeded RNG and shared room program;
+3. creates the occupancy canvas;
+4. carves the archetype/subtype hull and captures the original hull mask;
+5. assigns functional zones;
+6. carves ship, station, or outpost circulation into the hull;
+7. places mask-aware rooms beside or through circulation;
+8. classifies and materializes deterministic room-side doors;
+9. derives the physical corridor graph and junctions from occupied tiles;
+10. materializes the static pressure-topology bridge;
+11. runs playability, aesthetic, facility-structure, and pressure validation;
+12. converts the result to `MapJSON`.
+
+Occupancy cells are authoritative. Connector paths and editor polylines are
+derived representations, not a second geometry source.
+
+## 4. Deterministic candidate family
+
+For multi-candidate profiles, child seeds are derived from:
+
+```text
+hash(masterSeed, "grid-candidate-v1", candidateIndex)
+```
+
+Candidate count is not part of the derivation, so increasing selection effort
+preserves the earlier child seeds. Draft uses the master seed directly because
+its pool contains one candidate.
+
+The same explicit request, profile, and code version produces the same
+candidate family, normalized document, and selected index.
+
+## 5. Hard-gated Pareto selection
+
+The selector rejects candidates with generation failures, missing required
+metrics, semantic/structural/pressure errors, disconnected or isolated rooms,
+unreachable critical rooms, fallback ingress, ambiguous/mismatched doors,
+invalid connector geometry, broken room-port anchors, or non-finite
+objectives.
+
+Passing candidates are ranked in this order:
+
+1. Pareto front over `routeClarity`, `hullUseFit`, and `ttrpgChoice`;
+2. min-aware balanced score
+   `0.5 * mean(objectives) + 0.5 * min(objectives)`;
+3. numeric `candidateIndex`.
+
+If no candidate passes, generation returns `NO_VALID_CANDIDATE`; a rejected
+map is not silently promoted.
+
+Selection metadata is stored at `meta.candidateSelection`, including the
+schema/evaluator versions, master and selected seeds, evaluated/passed/rejected
+counts, selected index, Pareto rank, objectives, balanced score, and reason
+codes.
+
+## 6. Worker path
+
+The panel and worker share one protocol:
+
+```text
+GenerationPanel
+  -> GENERATE request
+  -> generation.worker.ts
+  -> generationRuntime.ts
+  -> generateMapAsync
+  -> COMPLETE { format: "map-json-v1", map }
+```
+
+The parser accepts one `GENERATE`/`CANCEL` request union and rejects obsolete
+engine/quality switches. Candidate progress and cancellation are scoped by
+`requestId`.
+
+## 7. Gallery path
+
+Gallery mode generates each variant with `generateMap`, a derived seed, and
+`qualityProfile: "draft"`. It then ranks the resulting occupancy maps with the
+existing grid-candidate ranking helper. Gallery variety comes from derived
+seeds, not from a legacy or quality engine.
+
+## 8. Connector conversion
+
+Every fresh occupancy connector is serialized with
+`representation: "physical-topology-edge-v1"`. Historical room-route
+generation writes `"room-route-v1"`.
+
+The editor adapter normalizes each connector independently. Explicit
+representation wins; only discriminator-free `corridor-edge-*` IDs use the
+historical physical fallback. All other discriminator-free connectors become
+room routes. Physical edges are preserved, while only room routes receive
+legacy coalescing and endpoint-door adaptation.
+
+## 9. Compatibility-only generation
+
+Historical legacy and quality generation can be imported only through
+`src/generators/compatibility/index.ts`. They exist for regression comparison
+and old-data compatibility and are not reachable from the production UI or
+worker.
+
+## 10. Enforced boundary and corpus
+
+- `npm run check:generator-boundary` traverses the UI and worker import graphs
+  and rejects competing geometry modules.
+- `generationCorpus.test.ts` runs ship, station, and outpost fixtures through
+  the same production facade and checks deterministic normalized summaries.
+- Connector fixtures cover explicit physical arbitrary IDs, discriminator-free
+  historical data, explicit-wins behavior, and mixed decks.
+
+## 11. Deferred work
+
+`MapDocumentV2`, runtime migrations, and `importGeneratedMap` remain Phase 2.
+Editable topology, corridor attachment/rerouting, and door manipulation remain
+later editor phases. Phase 1 keeps the current `MapJSON` bridge.

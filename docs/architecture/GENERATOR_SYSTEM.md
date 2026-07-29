@@ -1,305 +1,160 @@
 # Архитектура процедурного генератора
 
-> **Current status (2026-07-29):** The occupancy-grid engine is the only
-> production target. The stages below describe the legacy generator and remain
-> historical/compatibility material. `quality/pipeline.ts` is not a second
-> production target; Phase 1 may extract reusable validation/scoring and retire
-> its independent generation path. Production dispatch changes are deferred to
-> Phase 1. See [ADR: Active Production Generator](./ACTIVE_GENERATOR_ADR.md).
+> **Current status (2026-07-30):** occupancy/grid is the only product
+> generation engine. Draft, Standard, and Polish are selection-effort profiles
+> over that engine. Historical room-route and quality generators are available
+> only from `src/generators/compatibility`.
 
-## Обзор
+See [ADR: Active Production Generator](./ACTIVE_GENERATOR_ADR.md).
 
-Процедурный генератор создаёт карты космических кораблей, станций и аванпостов на основе параметров. Реализован 8-этапный пайплайн согласно спецификациям в `docs/generator/`.
+## Production ownership
 
-## Модули
+| Layer | Owner | Contract |
+| --- | --- | --- |
+| Product facade | `src/generators/generator.ts` | `generateMap` and `generateMapAsync`; always occupancy |
+| Profile policy | `src/generators/productionProfiles.ts` | exact deterministic candidate counts |
+| Geometry engine | `src/generators/gridGenerator/occupancyGenerator.ts` | carved occupancy is source of truth |
+| Candidate selection | `src/generators/gridGenerator/candidateSelector.ts` | hard gates, Pareto fronts, balanced-score/index tie-break |
+| Worker protocol | `src/workers/generationProtocol.ts` | one `GENERATE`/`CANCEL` request union and one response union |
+| Worker orchestration | `src/workers/generationRuntime.ts` | request-scoped cancellation/progress and `generateMapAsync` |
+| Product UI | `src/ui/panels/GenerationPanel.tsx` | profile selection; no engine selection |
+| Compatibility | `src/generators/compatibility/index.ts` | regression/import-only historical APIs |
 
-### 1. types.ts
+The production generator barrel does not export `MapGenerator`, legacy
+presets, old layout/topology generation, skeleton generators, or quality
+generation.
 
-Основные типы генератора:
+## Production request
 
-```typescript
-// Архетипы
-type Archetype = 'ship' | 'station' | 'outpost'
-
-// Подтипы кораблей
-type ShipSubtype = 'explorer' | 'freighter' | 'military' | 'liner' | 'mining'
-
-// Размерные тиры
-type SizeTier = 'xs' | 'sm' | 'md' | 'lg' | 'xl'
-
-// Профили стиля
-type StyleProfile = 'utilitarian' | 'military' | 'luxury' | 'industrial' | 'organic' | 'alien'
-```
-
-### 2. rng.ts
-
-Детерминированный генератор случайных чисел:
-
-```typescript
-// Mulberry32 алгоритм
-function createRNG(seed: string): SeededRNG
-
-interface SeededRNG {
-  next(): number        // 0-1
-  nextInt(max): number  // 0 to max-1
-  shuffle<T>(arr: T[]): T[]
-  pick<T>(arr: T[]): T
-}
-```
-
-### 3. roomConfigs.ts
-
-Каталог из 40+ типов комнат:
-
-```typescript
-interface RoomTypeConfig {
-  id: string
-  category: 'core' | 'crew' | 'engineering' | 'cargo' | 'medical' | 'science' | 'security' | 'access'
-  label: string
-  countRules: CountRule[]
-  sizeByTier: Record<SizeTier, SizeRange>
-  importance: 'primary' | 'secondary' | 'support' | 'optional'
-  adjacencyPreferences: string[]
-  accessLevel: number
-}
-```
-
-Также определены конфигурации архетипов:
-
-```typescript
-interface ArchetypeConfig {
-  id: Archetype
-  name: string
-  subtypes: SubtypeConfig[]
-  priorityRooms: string[]
-  forbiddenRooms: string[]
-}
-```
-
-### 4. roomProgram.ts
-
-Генерация программы комнат (Stage 2):
-
-```typescript
-function generateRoomProgram(
-  request: GenerationRequest,
-  rng: SeededRNG
-): RoomProgram
-
-interface RoomProgram {
-  rooms: ProgrammedRoom[]
-  zoneDistribution: Record<Zone, number>
-  connectorHints: ConnectorHint[]
-}
-```
-
-Алгоритм:
-1. Получить конфиги для архетипа/подтипа
-2. Выбрать обязательные комнаты (priority)
-3. Добавить дополнительные по квотам зон
-4. Присвоить размеры согласно sizeTier
-
-### 5. topology.ts
-
-Генерация графа связности (Stage 3):
-
-```typescript
-function generateTopology(
-  program: RoomProgram,
-  request: GenerationRequest,
-  rng: SeededRNG
-): TopologyGraph
-
-interface TopologyGraph {
-  nodes: ProgrammedRoom[]
-  connectors: GraphConnector[]
-  decks: DeckAssignment[]
-}
-```
-
-Алгоритм:
-1. Построить backbone (основной хребет)
-2. Добавить clusters вокруг узловых комнат
-3. Добавить loops для нелинейности
-4. Распределить по палубам
-5. Добавить vertical links
-
-### 6. layout.ts
-
-Геометрическое размещение (Stages 4-5):
-
-```typescript
-function generateLayout(
-  topology: TopologyGraph,
-  request: GenerationRequest,
-  rng: SeededRNG
-): DeckLayout[]
-
-interface DeckLayout {
-  deckIndex: number
-  rooms: LayoutRoom[]
-  connectors: LayoutConnector[]
-}
-```
-
-Паттерны размещения:
-- **linear**: Линейное расположение (корабли)
-- **hub**: Радиальное от центра (станции)
-- **grid**: Сетка (аванпосты)
-
-### 7. generator.ts
-
-Главный пайплайн:
-
-```typescript
-function generateMap(options: GeneratorOptions): GenerationResult
-
+```ts
 interface GeneratorOptions {
-  seed: string
-  archetype: Archetype
-  subtype: Subtype
-  sizeTier: SizeTier
-  styleProfile: StyleProfile
-  loopiness: number  // 0-1
-  danger: number     // 0-1
+  seed?: string
+  archetype?: 'ship' | 'station' | 'outpost'
+  subtype?: Subtype
+  styleProfile?: StyleProfile
+  sizeTier?: 'xs' | 'sm' | 'md' | 'lg' | 'xl'
+  loopiness?: number
+  danger?: number
+  qualityProfile?: 'draft' | 'standard' | 'polish'
 }
 ```
 
-## 8-этапный пайплайн
+`qualityProfile` changes selection effort only:
 
-```
-┌─────────────────┐
-│ 1. Normalize    │  Валидация и нормализация входных параметров
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 2. Room Program │  Выбор комнат по архетипу и размеру
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 3. Topology     │  Построение графа связности
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 4. Deck Assign  │  Распределение по палубам
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 5. Layout       │  Геометрическое размещение
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 6. Layers       │  Заполнение слоёв (декор, объекты)
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 7. Validation   │  Проверка правил и ограничений
-└────────┬────────┘
-         ▼
-┌─────────────────┐
-│ 8. Export       │  Формирование MapJSON
-└────────┴────────┘
-```
+| Profile | XS | SM | MD | LG | XL |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Draft | 1 | 1 | 1 | 1 | 1 |
+| Standard | 4 | 4 | 3 | 2 | 2 |
+| Polish | 8 | 8 | 6 | 4 | 4 |
 
-## Конверсия в формат редактора
+The default profile is Standard. All counts pass through the same occupancy
+candidate selector and require a hard-pass result.
 
-```typescript
-function convertToEditorFormat(
-  mapJson: MapJSON, 
-  deckIndex: number
-): EditorMapData
+## Occupancy production pipeline
 
-interface EditorMapData {
-  rooms: Room[]      // core/types.ts Room
-  corridors: Corridor[]
-  doors: Door[]
+`generateGridMapV2()` performs one deterministic occupancy-first attempt:
+
+1. normalize the effective request and create the seeded RNG;
+2. generate the shared room program;
+3. create the grid canvas and carve an archetype/subtype hull;
+4. capture the original hull mask;
+5. assign zones;
+6. carve archetype-specific circulation;
+7. place rooms in mask-aware corridor bays and assign circulation roles;
+8. classify and materialize room-side door tiles;
+9. derive pressure topology, physical corridor graph, junctions, validation
+   metrics, and `MapJSON`.
+
+`generateMap`/`generateMapAsync` wrap that attempt in deterministic
+candidate selection. They do not call the old layout/topology or quality
+pipelines.
+
+## Candidate selection
+
+For a master seed, candidate indices are deterministic. Multi-candidate child
+seeds use the stable `"grid-candidate-v1"` salt and do not depend on pool size,
+so increasing the profile count preserves the earlier candidate family.
+
+Candidates must pass semantic, structure, pressure, door, connector geometry,
+room-port anchor, and finite-objective gates. Passing candidates are ordered by:
+
+1. Pareto rank across `routeClarity`, `hullUseFit`, `ttrpgChoice`;
+2. min-aware balanced score;
+3. numeric candidate index.
+
+If no candidate passes, the facade returns a stable `NO_VALID_CANDIDATE`
+failure. The selector never returns a rejected candidate as production output.
+
+## Worker and UI
+
+The generation panel builds a typed `GENERATE` request through
+`buildGenerationWorkerRequest`. The worker parser rejects unknown fields and
+the obsolete `engine`, `useQuality`, and `qualityMode` fields. Runtime progress
+and cancellation are scoped by `requestId`; completion has exactly one shape:
+
+```ts
+{
+  type: 'COMPLETE'
+  requestId: string
+  format: 'map-json-v1'
+  map: MapJSON
 }
 ```
 
-Маппинг типов комнат генератора → редактора:
-- `bridge` → `RoomType.Bridge`
-- `reactor` → `RoomType.Reactor`
-- `crewQuarters` → `RoomType.CrewQuarters`
-- и т.д.
+There is no `bestCandidate` response variant. Gallery mode generates several
+Draft requests through the same synchronous facade using derived seeds and
+ranks their returned occupancy maps with the same candidate evaluation policy.
 
-## Зоны (Zones)
+## Connectors and editor adaptation
 
-| Зона | Описание | Цвет |
-|------|----------|------|
-| command | Командная зона | Синий |
-| engineering | Инженерная | Жёлтый |
-| crew | Жилая | Зелёный |
-| cargo | Грузовая | Коричневый |
-| medical | Медицинская | Белый |
-| science | Научная | Фиолетовый |
-| security | Безопасность | Красный |
-| access | Доступ | Серый |
+Each new connector includes:
 
-## Валидация
-
-Генератор проверяет:
-- Связность графа (все комнаты достижимы)
-- Наличие обязательных комнат
-- Соответствие размеров типам
-- Отсутствие коллизий геометрии
-
-## Seed и воспроизводимость
-
-Один и тот же seed гарантирует:
-- Одинаковый набор комнат
-- Одинаковую топологию
-- Одинаковое геометрическое размещение
-- Одинаковые идентификаторы объектов
-
-## Использование
-
-```typescript
-import { generateMap, convertToEditorFormat } from '@generators'
-
-const result = generateMap({
-  seed: 'my-seed',
-  archetype: 'ship',
-  subtype: 'explorer',
-  sizeTier: 'md',
-  styleProfile: 'utilitarian',
-  loopiness: 0.5,
-  danger: 0.3
-})
-
-if (result.success) {
-  const editorData = convertToEditorFormat(result.map, 0)
-  // editorData.rooms, editorData.corridors, editorData.doors
-}
+```ts
+representation:
+  | 'physical-topology-edge-v1'
+  | 'room-route-v1'
 ```
 
-## Расширение
+Occupancy conversion writes `physical-topology-edge-v1`; the historical legacy
+pipeline writes `room-route-v1`. Explicit values win even when an ID looks
+historical. Only discriminator-free `corridor-edge-*` IDs fall back to physical
+topology; all other missing values fall back to room routes.
 
-### Добавление нового типа комнаты
+The editor adapter normalizes each connector separately. It preserves physical
+graph edges without legacy coalescing, coalesces only room-route connectors,
+and creates legacy endpoint doors only for room routes. This supports mixed
+historical decks without a deck-wide format guess.
 
-1. Добавить в `roomConfigs.ts`:
-```typescript
-'myRoom': {
-  id: 'myRoom',
-  category: 'crew',
-  label: 'My Room',
-  countRules: [...],
-  sizeByTier: sizeByTier(...),
-  importance: 'support',
-  adjacencyPreferences: ['corridor'],
-  accessLevel: 1
-}
+## Determinism evidence
+
+`src/generators/__tests__/generationCorpus.test.ts` freezes ship, station, and
+outpost requests through the same `generateMap` facade. Each fixture records
+its full request/profile, normalized document hash, room/connector/door counts,
+candidate count, selected index, and semantic validator statuses.
+
+## Import graph enforcement
+
+`npm run check:generator-boundary` statically follows imports and re-exports
+from `GenerationPanel.tsx` and `generation.worker.ts`. It fails if either
+production entry can reach the quality pipeline, legacy generation,
+`MapGenerator`, old layout/topology, or skeleton generators. This command is
+part of `npm run check`.
+
+## Historical APIs
+
+Use historical generation only by an explicit compatibility import:
+
+```ts
+import {
+  generateLegacyMapForRegression,
+} from './generators/compatibility'
 ```
 
-2. Добавить в `generator.ts` маппинг:
-```typescript
-'myRoom': RoomTypeEnum.MyRoom
-```
+The retained quality pipeline and old `MapGenerator`/presets live behind the
+same compatibility barrel. They are not product extension points.
 
-### Добавление нового архетипа
+## Document model boundary
 
-1. Обновить `types.ts`:
-```typescript
-type Archetype = 'ship' | 'station' | 'outpost' | 'myArchetype'
-```
-
-2. Добавить в `ARCHETYPE_CONFIGS` в `roomConfigs.ts`
+Production currently returns `MapJSON`. `MapDocumentV2`, runtime parsers,
+migrations, and the explicit `importGeneratedMap` boundary remain Phase 2.
+Phase 1 does not change document version numbers or editor store models.

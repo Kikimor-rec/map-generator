@@ -125,3 +125,45 @@ corridors.
 Future repair actions must still be planned and applied as one undoable
 transaction. They must not move an airlock or create a new corridor when the
 geometry is ambiguous.
+
+## 10.8 Production candidate hard gates
+
+`gridGenerator/candidateSelector.ts` evaluates every Draft, Standard, and
+Polish occupancy candidate with one hard-gate policy. Profile choice changes
+candidate count only; every profile has `requireHardPass: true`.
+
+A production candidate is rejected for:
+
+- generation failure or missing required quality metrics;
+- playability error, disconnected/isolated rooms, unreachable critical rooms,
+  or fallback ingress;
+- ambiguous doors or mismatch between physical doors and placement metadata;
+- facility-structure error, disconnected envelope, or structural-void
+  collision;
+- pressure-topology error or invalid pressure-door metadata;
+- non-finite/non-orthogonal connector paths;
+- room-port anchors that do not resolve to the same stored port position;
+- non-finite selection objectives.
+
+Aesthetic and semantic warning codes remain reviewable metadata; they do not
+become a competing repair/generation path. If no candidate passes, the facade
+returns `NO_VALID_CANDIDATE` with stable reason codes instead of returning a
+rejected map as the best available result.
+
+## 10.9 Deterministic selection after validation
+
+Hard-pass candidates are assigned Pareto fronts over:
+
+- `routeClarity`;
+- `hullUseFit`;
+- `ttrpgChoice`.
+
+Within the earliest front, the selector uses the min-aware balanced score
+`0.5 * mean + 0.5 * minimum`; numeric candidate index is the final tie-break.
+The worker and synchronous facade use this same selector. No elapsed-time
+budget, quality-pipeline threshold, or second score changes production
+selection.
+
+The current selector is read-only over completed occupancy candidates. General
+auto-repair, editor preview/confirm/undo, and atomic corridor/door repair remain
+later-phase work.

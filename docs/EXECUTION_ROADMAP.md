@@ -1,7 +1,7 @@
 # Execution Roadmap: Semantic Sci-Fi Blueprint Studio
 
 **Status:** Authoritative implementation order
-**Updated:** 2026-07-29
+**Updated:** 2026-07-30
 **First usable milestone:** Canonical Blueprint Editor
 
 `PRODUCT_VISION.md` preserves the full desired product. This document controls
@@ -78,21 +78,65 @@ Gate:
 
 **Outcome:** Product UI and worker cannot silently select three different map
 architectures.
+**Status:** Complete locally (2026-07-30); remote CI pending.
 
 Scope:
 
 - route production generation only through the occupancy engine;
-- convert Draft, Standard, and Polish into candidate-count/threshold profiles;
+- convert Draft, Standard, and Polish into deterministic candidate-count
+  profiles over the same hard-gated selector;
 - stop using `quality/pipeline.ts` as a second production generator;
 - retain legacy generation only as explicit import/regression compatibility;
-- replace ID-prefix format detection with an explicit connector format.
+- serialize explicit connector representation, with ID-prefix inference only
+  for discriminator-free historical input.
 
 Gate:
 
-- the production import graph reaches one generator;
-- no user-facing legacy/quality engine toggle remains;
-- all three archetypes pass the seed corpus through the same entry point;
-- compatibility fixtures remain readable.
+- [x] the UI and worker production import graphs reach one geometry generator:
+  occupancy/grid;
+- [x] no user-facing or worker payload switch selects legacy or
+  quality-pipeline geometry;
+- [x] Draft/Standard/Polish use the exact `1/1/1/1/1`,
+  `4/4/3/2/2`, and `8/8/6/4/4` candidate tables and the same
+  hard-gate/Pareto selector;
+- [x] ship, station, and outpost corpus fixtures call the same facade and pass
+  deterministic summaries;
+- [x] fresh connectors carry an explicit representation and compatibility
+  fixtures cover historical prefixed grid, arbitrary-ID legacy/physical, and
+  mixed-deck input;
+- [x] the production boundary checker is part of `npm run check`;
+- [x] tests, lint, typecheck, boundary check, and build pass locally;
+- [ ] remote CI passes for the pushed Phase 1 commit.
+
+**Local evidence (2026-07-30):**
+
+- targeted Phase 1 Vitest — 5 files, 50 tests passed:
+
+  ```text
+  npx vitest run src/generators/__tests__/connectorRepresentation.test.ts src/generators/__tests__/productionProfiles.test.ts src/generators/__tests__/generationCorpus.test.ts src/workers/__tests__/generationRuntime.test.ts src/ui/panels/__tests__/generationPanelModel.test.ts --maxWorkers=2
+  ```
+
+- boundary behavior:
+  `node --test scripts/__tests__/production-generation-boundary.test.mjs` —
+  3 tests passed;
+- production graph:
+  `npm run check:generator-boundary` — 2 entry points checked,
+  `production generator boundary: ok`;
+- capped application suite:
+  `npm test -- --maxWorkers=2` — 34 files, 292 tests passed;
+- `npm run lint` — 0 errors, 128 pre-existing warnings;
+- `npm run typecheck` — passed;
+- `npm run build` — passed, 536 modules transformed;
+- canonical local gate: `npm run check` — passed; 34 files / 292 tests,
+  lint/typecheck/boundary/build all completed.
+
+The dedicated boundary test is a Node `node:test` file and is intentionally
+excluded by the repository's Vitest script. A raw unexcluded
+`npx vitest run --maxWorkers=2` run passed all 292 Vitest assertions but then
+reported that Node-only file as “No test suite found”; the file passes 3/3
+under its intended Node runner above.
+
+**Remote CI:** Pending. No Phase 1 branch run has been pushed or observed yet.
 
 ## Phase 2 — Canonical document and import boundary
 
@@ -325,5 +369,8 @@ conflict, this roadmap and an accepted ADR take precedence.
 ## Current focus
 
 **Completed:** Phase 0 — Ground truth and guardrails (verified by Ubuntu/Node 22 CI).
-**Next:** Phase 1 — One production generation path (not started).
+**Completed locally:** Phase 1 — One production generation path (remote CI
+pending).
+**Next:** Push/verify Phase 1 CI when authorized, then Phase 2 — Canonical
+document and import boundary.
 **First external testing target:** Phase 5 — Canonical Blueprint Editor.
