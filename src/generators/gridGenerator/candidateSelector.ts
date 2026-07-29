@@ -68,10 +68,13 @@ export interface BestGridMapResult extends GridGeneratorResult {
   }
 }
 
-export interface AsyncGridCandidateHooks {
+export interface CandidateGenerationHooks {
   signal?: AbortSignal
   onCandidate?: (completed: number, total: number) => void
 }
+
+/** @deprecated Use CandidateGenerationHooks. */
+export type AsyncGridCandidateHooks = CandidateGenerationHooks
 
 const DEFAULT_CANDIDATE_COUNTS: Record<SizeTier, number> = {
   xs: 4,
@@ -208,7 +211,7 @@ export function generateBestGridMap(
 export async function generateBestGridMapAsync(
   options: GridGeneratorOptions = {},
   candidateCount = getDefaultGridCandidateCount(options.sizeTier),
-  hooks: AsyncGridCandidateHooks = {}
+  hooks: CandidateGenerationHooks = {}
 ): Promise<BestGridMapResult> {
   const safeCount = clampInteger(candidateCount, 1, 12)
   const masterSeed = String(options.seed ?? Date.now())

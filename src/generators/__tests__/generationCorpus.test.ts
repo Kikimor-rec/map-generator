@@ -25,12 +25,16 @@ describe('generation corpus fixture provenance', () => {
       sizeTier: expect.any(String),
       loopiness: expect.any(Number),
       danger: expect.any(Number),
-      engine: 'grid',
-      gridCandidateCount: 1,
+      qualityProfile: expect.stringMatching(/^(draft|standard|polish)$/),
     }))
   })
 })
 
+describe('production corpus profiles', () => {
+  it.each(GENERATION_CORPUS)('$id uses the standard profile', fixture => {
+    expect(fixture.request.qualityProfile).toBe('standard')
+  })
+})
 describe.each(GENERATION_CORPUS)('$id', fixture => {
   it('matches the frozen summary and remains deterministic', () => {
     const first = runGenerationCorpusCase(fixture)
@@ -40,6 +44,9 @@ describe.each(GENERATION_CORPUS)('$id', fixture => {
     expect(second).toEqual(fixture.expected)
     expect(first.roomCount).toBeGreaterThan(0)
     expect(first.connectorCount).toBeGreaterThan(0)
+    expect(first.doorCount).toBeGreaterThan(0)
+    expect(first.candidateCount).toBe(4)
+    expect(first.selectedCandidateIndex).toBeGreaterThanOrEqual(0)
     expect(first.playabilityStatus).toMatch(/^(pass|warning)$/)
     expect(first.facilityStructureStatus).toMatch(/^(pass|warning)$/)
     expect(first.pressureStatus).toMatch(/^(pass|warning)$/)

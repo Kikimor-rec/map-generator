@@ -14,14 +14,11 @@ type ExplicitRequestFields =
   | 'sizeTier'
   | 'loopiness'
   | 'danger'
+  | 'qualityProfile'
 
 export type GenerationCorpusRequest =
   & Required<Pick<GeneratorOptions, ExplicitRequestFields>>
   & Pick<GeneratorOptions, 'styleProfile'>
-  & {
-    engine: 'grid'
-    gridCandidateCount: 1
-  }
 
 type SemanticStatus = NonNullable<TTRPGMetrics['playabilityStatus']>
 type SemanticStatusKey =
@@ -41,6 +38,9 @@ export interface GenerationCorpusSummary {
   documentHash: string
   roomCount: number
   connectorCount: number
+  doorCount: number
+  candidateCount: number
+  selectedCandidateIndex: number
   issueCodes: string[]
   playabilityStatus: SemanticStatus
   facilityStructureStatus: SemanticStatus
@@ -82,15 +82,17 @@ export const GENERATION_CORPUS = [
       sizeTier: 'xs',
       loopiness: 0.45,
       danger: 0.3,
-      engine: 'grid',
-      gridCandidateCount: 1,
+      qualityProfile: 'standard',
     },
     expected: {
       caseId: 'ship-courier-xs',
-      requestHash: '6fec9acd',
-      documentHash: 'e7fffe48',
-      roomCount: 6,
-      connectorCount: 10,
+      requestHash: 'deb7a7f7',
+      documentHash: '64263c78',
+      roomCount: 8,
+      connectorCount: 14,
+      doorCount: 9,
+      candidateCount: 4,
+      selectedCandidateIndex: 2,
       issueCodes: [],
       playabilityStatus: 'pass',
       facilityStructureStatus: 'pass',
@@ -106,15 +108,17 @@ export const GENERATION_CORPUS = [
       sizeTier: 'xs',
       loopiness: 0.55,
       danger: 0.35,
-      engine: 'grid',
-      gridCandidateCount: 1,
+      qualityProfile: 'standard',
     },
     expected: {
       caseId: 'station-research-xs',
-      requestHash: 'b181239f',
-      documentHash: 'e3c900eb',
-      roomCount: 7,
-      connectorCount: 24,
+      requestHash: '68410663',
+      documentHash: '15ce5de9',
+      roomCount: 8,
+      connectorCount: 25,
+      doorCount: 9,
+      candidateCount: 4,
+      selectedCandidateIndex: 1,
       issueCodes: [],
       playabilityStatus: 'pass',
       facilityStructureStatus: 'pass',
@@ -130,15 +134,17 @@ export const GENERATION_CORPUS = [
       sizeTier: 'xs',
       loopiness: 0.4,
       danger: 0.4,
-      engine: 'grid',
-      gridCandidateCount: 1,
+      qualityProfile: 'standard',
     },
     expected: {
       caseId: 'outpost-mining-xs',
-      requestHash: '0cf94283',
-      documentHash: '18f2510d',
-      roomCount: 4,
-      connectorCount: 24,
+      requestHash: '9000ff49',
+      documentHash: 'a078a3eb',
+      roomCount: 8,
+      connectorCount: 47,
+      doorCount: 10,
+      candidateCount: 4,
+      selectedCandidateIndex: 2,
       issueCodes: [],
       playabilityStatus: 'pass',
       facilityStructureStatus: 'pass',
@@ -158,16 +164,18 @@ export const GENERATION_HISTORICAL_INPUTS = [
       sizeTier: 'md',
       loopiness: 0.5,
       danger: 0.3,
-      engine: 'grid',
-      gridCandidateCount: 1,
+      qualityProfile: 'draft',
     },
     coverage: 'current occupancy-engine smoke coverage using the historical QWHJGV9K freeze input',
     expected: {
       caseId: 'ship-freighter-qwhjgv9k-historical-grid-smoke',
-      requestHash: '70491d9e',
-      documentHash: 'b5e7d728',
+      requestHash: '5b1aff1c',
+      documentHash: 'd9db8a1f',
       roomCount: 18,
       connectorCount: 26,
+      doorCount: 22,
+      candidateCount: 1,
+      selectedCandidateIndex: 0,
       issueCodes: [],
       playabilityStatus: 'pass',
       facilityStructureStatus: 'pass',
@@ -198,8 +206,23 @@ export function runGenerationCorpusCase(
   const normalizedDocument = { ...document, meta: stableMeta }
 
   const metrics = document.meta.ttrpgMetrics
+  const selection = document.meta.candidateSelection
+  if (!selection) {
+    throw new GenerationCorpusError(fixture.id, [{
+      severity: 'error',
+      stage: 'corpus',
+      message: 'Missing candidate selection metadata',
+    }])
+  }
   const roomCount = document.decks.reduce((count, deck) => count + deck.rooms.length, 0)
   const connectorCount = document.decks.reduce((count, deck) => count + deck.connectors.length, 0)
+  const doorCount = document.decks.reduce(
+    (count, deck) => count + deck.rooms.reduce(
+      (deckCount, room) => deckCount + room.ports.length,
+      0,
+    ),
+    0,
+  )
 
   return {
     caseId: fixture.id,
@@ -207,6 +230,9 @@ export function runGenerationCorpusCase(
     documentHash: stableHash(normalizedDocument),
     roomCount,
     connectorCount,
+    doorCount,
+    candidateCount: selection.requestedCandidates,
+    selectedCandidateIndex: selection.selectedIndex,
     issueCodes: result.issues
       .map(issue => `${issue.severity}:${issue.stage}:${issue.message}`)
       .sort(),

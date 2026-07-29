@@ -4,8 +4,21 @@
  */
 
 // Main generator
-export { generateMap, convertToEditorFormat } from './generator'
-export type { GeneratorOptions, GenerationResult, EditorMapData, RoutingOptions } from './generator'
+export { generateMap, generateMapAsync, convertToEditorFormat } from './generator'
+export type {
+  CandidateGenerationHooks,
+  GeneratorOptions,
+  GenerationResult,
+  EditorMapData,
+  RoutingOptions,
+} from './generator'
+
+export { PRODUCTION_PROFILES, getCandidateCount } from './productionProfiles'
+export type {
+  GenerationQualityProfile,
+  MapSize,
+  ProductionProfile,
+} from './productionProfiles'
 
 // Types
 export type {
@@ -53,8 +66,3 @@ export type {
 
 // Sub-generators (for advanced usage)
 export { generateRoomProgram, validateRoomProgram } from './roomProgram'
-export { generateTopology, validateTopology } from './topology'
-export { generateLayout, validateLayout } from './layout'
-
-// Legacy export for compatibility
-export { MapGenerator, generateFromPreset, GENERATION_PRESETS } from './mapGenerator'

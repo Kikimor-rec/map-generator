@@ -256,6 +256,7 @@ export {
   rankGridCandidates,
   type AsyncGridCandidateHooks,
   type BestGridMapResult,
+  type CandidateGenerationHooks,
   type GridCandidateEvaluation,
   type GridCandidateEvaluationContext,
   type GridCandidateHardIssue,

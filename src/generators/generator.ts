@@ -5,13 +5,10 @@
  */
 
 import type {
-  GenerationRequest,
   RoomProgram,
   TopologyGraph,
   DeckLayout,
   MapJSON,
-  MapMeta,
-  TTRPGMetrics,
   ValidationIssue,
   Archetype,
   Subtype,
@@ -38,13 +35,20 @@ import type {
 
 import { RoomType as RoomTypeEnum, DoorType as DoorTypeEnum, CorridorStyle as CorridorStyleEnum } from '@core/types'
 
-import { createRNG } from './rng'
-import { generateRoomProgram, validateRoomProgram } from './roomProgram'
-import { generateTopology, validateTopology } from './topology'
-import { generateLayout, validateLayout } from './layout'
 import { coalesceCorridors } from '@core/corridorCoalesce'
 import { DEFAULT_COALESCE_SETTINGS, type CoalesceSettings, type RoutingCostConfig, DEFAULT_ROUTING_COSTS } from '@core/corridorTypes'
-import { generateBestGridMap, generateGridMap } from './gridGenerator'
+import type { GridGeneratorOptions } from './gridGenerator'
+import {
+  generateBestGridMap,
+  generateBestGridMapAsync,
+  type BestGridMapResult,
+  type CandidateGenerationHooks,
+} from './gridGenerator/candidateSelector'
+export type { CandidateGenerationHooks } from './gridGenerator/candidateSelector'
+import {
+  getCandidateCount,
+  type GenerationQualityProfile,
+} from './productionProfiles'
 
 // ============================================================================
 // GENERATOR OPTIONS
@@ -80,34 +84,16 @@ export interface GeneratorOptions {
   skipValidation?: boolean
   /** Advanced routing options */
   routing?: RoutingOptions
-  /** Generation engine: 'legacy' (skeleton-first) or 'grid' (tile-based) */
-  engine?: 'legacy' | 'grid'
-  /** Deterministic grid variants to evaluate before selecting a result */
-  gridCandidateCount?: number
+  /** Candidate-selection effort. All profiles use the occupancy generator. */
+  qualityProfile?: GenerationQualityProfile
 }
 
 // ============================================================================
 // DEFAULT VALUES
 // ============================================================================
 
-const DEFAULT_OPTIONS: Required<GeneratorOptions> = {
-  seed: Date.now().toString(),
-  archetype: 'ship',
-  subtype: 'explorer',
-  styleProfile: 'utilitarian',
-  sizeTier: 'md',
-  loopiness: 0.5,
-  danger: 0.3,
-  skipValidation: false,
-  routing: {
-    coalesceEnabled: true,
-    bendPenalty: DEFAULT_ROUTING_COSTS.bendPenalty,
-    reuseBonus: DEFAULT_ROUTING_COSTS.reuseBonus,
-    crossingPenalty: DEFAULT_ROUTING_COSTS.crossingPenalty,
-  },
-  engine: 'grid', // New default: use grid-based generator
-  gridCandidateCount: 1,
-}
+const DEFAULT_QUALITY_PROFILE: GenerationQualityProfile = 'standard'
+const DEFAULT_SIZE_TIER: SizeTier = 'md'
 
 // ============================================================================
 // MAIN GENERATOR
@@ -140,279 +126,88 @@ export interface GenerationResult {
  * Generate a complete map based on the provided options
  */
 export function generateMap(options: GeneratorOptions = {}): GenerationResult {
-  // Use grid generator if selected
-  const engine = options.engine ?? DEFAULT_OPTIONS.engine
-  if (engine === 'grid') {
-    return generateMapWithGridEngine(options)
+  const candidateCount = getCandidateCount(
+    options.qualityProfile ?? DEFAULT_QUALITY_PROFILE,
+    options.sizeTier ?? DEFAULT_SIZE_TIER,
+  )
+
+  return toGenerationResult(
+    generateBestGridMap(toGridGeneratorOptions(options), candidateCount),
+  )
+}
+
+export async function generateMapAsync(
+  options: GeneratorOptions = {},
+  hooks: CandidateGenerationHooks = {},
+): Promise<GenerationResult> {
+  const candidateCount = getCandidateCount(
+    options.qualityProfile ?? DEFAULT_QUALITY_PROFILE,
+    options.sizeTier ?? DEFAULT_SIZE_TIER,
+  )
+  const result = await generateBestGridMapAsync(
+    toGridGeneratorOptions(options),
+    candidateCount,
+    hooks,
+  )
+
+  return toGenerationResult(result)
+}
+
+function toGridGeneratorOptions(options: GeneratorOptions): GridGeneratorOptions {
+  return {
+    seed: options.seed,
+    archetype: options.archetype,
+    subtype: options.subtype,
+    sizeTier: options.sizeTier,
+    styleProfile: options.styleProfile,
+    loopiness: options.loopiness,
+    danger: options.danger,
+    debug: false,
   }
+}
 
-  // Legacy generator
-  const startTime = performance.now()
-  const timing = {
-    total: 0,
-    roomProgram: 0,
-    topology: 0,
-    layout: 0,
-    validation: 0
-  }
-
-  const issues: ValidationIssue[] = []
-
-  // Normalize options with defaults
-  const request = normalizeRequest(options)
-  
-  try {
-    // Stage 2: Generate Room Program
-    const roomProgramStart = performance.now()
-    const roomProgram = generateRoomProgram({ request })
-    timing.roomProgram = performance.now() - roomProgramStart
-    
-    // Validate room program
-    if (!options.skipValidation) {
-      const validation = validateRoomProgram(roomProgram, request)
-      if (!validation.valid) {
-        for (const issue of validation.issues) {
-          issues.push({
-            severity: 'warning',
-            stage: 'roomProgram',
-            message: issue
-          })
-        }
-      }
-    }
-    
-    // Stage 3: Generate Topology Graph
-    const topologyStart = performance.now()
-    const topology = generateTopology({ request, program: roomProgram })
-    timing.topology = performance.now() - topologyStart
-    
-    // Validate topology
-    if (!options.skipValidation) {
-      const validation = validateTopology(topology)
-      if (!validation.valid) {
-        for (const issue of validation.issues) {
-          issues.push({
-            severity: 'warning',
-            stage: 'topology',
-            message: issue
-          })
-        }
-      }
-    }
-    
-    // Stage 4-5: Generate Layout Geometry
-    const layoutStart = performance.now()
-    const layouts = generateLayout({ request, topology })
-    timing.layout = performance.now() - layoutStart
-    
-    // Validate layout
-    if (!options.skipValidation) {
-      const validationStart = performance.now()
-      const validation = validateLayout(layouts)
-      timing.validation = performance.now() - validationStart
-      
-      if (!validation.valid) {
-        for (const issue of validation.issues) {
-          issues.push({
-            severity: 'warning',
-            stage: 'layout',
-            message: issue
-          })
-        }
-      }
-    }
-    
-    // Stage 7: Build final MapJSON
-    const map = buildMapJSON(request, roomProgram, topology, layouts)
-    
-    timing.total = performance.now() - startTime
-    
-    return {
-      success: true,
-      map,
-      roomProgram,
-      topology,
-      layouts,
-      issues,
-      timing
-    }
-    
-  } catch (error) {
-    timing.total = performance.now() - startTime
-    
-    issues.push({
-      severity: 'error',
-      stage: 'generator',
-      message: error instanceof Error ? error.message : String(error)
-    })
-    
+function toGenerationResult(result: BestGridMapResult): GenerationResult {
+  if (!result.success || !result.map) {
     return {
       success: false,
-      issues,
-      timing
+      issues: [{
+        severity: 'error',
+        stage: 'generator',
+        message: result.error || 'Grid generation failed',
+      }],
+      timing: {
+        total: result.timing.total,
+        roomProgram: 0,
+        topology: 0,
+        layout: result.timing.hull + result.timing.zones +
+          result.timing.spine + result.timing.rooms,
+        validation: 0,
+      },
     }
   }
-}
 
-// ============================================================================
-// REQUEST NORMALIZATION
-// ============================================================================
+  const layouts: DeckLayout[] = result.map.decks.map(deck => ({
+    deckIndex: deck.index,
+    gridWidth: deck.gridWidth,
+    gridHeight: deck.gridHeight,
+    rooms: deck.rooms,
+    connectors: deck.connectors,
+    junctions: deck.junctions,
+  }))
 
-function normalizeRequest(options: GeneratorOptions): GenerationRequest {
   return {
-    seed: options.seed ?? DEFAULT_OPTIONS.seed,
-    archetype: options.archetype ?? DEFAULT_OPTIONS.archetype,
-    subtype: options.subtype ?? DEFAULT_OPTIONS.subtype,
-    styleProfile: options.styleProfile ?? DEFAULT_OPTIONS.styleProfile,
-    sizeTier: options.sizeTier ?? DEFAULT_OPTIONS.sizeTier,
-    loopiness: options.loopiness ?? DEFAULT_OPTIONS.loopiness,
-    danger: options.danger ?? DEFAULT_OPTIONS.danger
+    success: true,
+    map: result.map,
+    layouts,
+    issues: [],
+    timing: {
+      total: result.timing.total,
+      roomProgram: 0,
+      topology: result.timing.hull + result.timing.zones,
+      layout: result.timing.spine + result.timing.rooms + result.timing.doors,
+      validation: result.timing.convert,
+    },
   }
-}
-
-// ============================================================================
-// MAP JSON BUILDER
-// ============================================================================
-
-function buildMapJSON(
-  request: GenerationRequest,
-  program: RoomProgram,
-  topology: TopologyGraph,
-  layouts: DeckLayout[]
-): MapJSON {
-  const meta = buildMeta(request, program, topology)
-  const grid = { cellSize: 40, snapEnabled: true }
-  const zones = buildZones(program)
-  
-  return {
-    version: '1.0.0',
-    meta,
-    grid,
-    zones,
-    decks: layouts.map(layout => ({
-      index: layout.deckIndex,
-      label: `Deck ${layout.deckIndex + 1}`,
-      gridWidth: layout.gridWidth,
-      gridHeight: layout.gridHeight,
-      rooms: layout.rooms,
-      connectors: layout.connectors.map(connector => ({
-        ...connector,
-        representation: 'room-route-v1',
-      })),
-      junctions: layout.junctions
-    }))
-  }
-}
-
-function buildMeta(
-  request: GenerationRequest,
-  program: RoomProgram,
-  topology: TopologyGraph
-): MapMeta {
-  const rng = createRNG(request.seed + '-name')
-  
-  return {
-    name: generateName(request, rng),
-    archetype: request.archetype,
-    subtype: request.subtype,
-    sizeTier: request.sizeTier,
-    seed: String(request.seed),
-    generatedAt: new Date().toISOString(),
-    ttrpgMetrics: buildTTRPGMetrics(program, topology),
-    tags: buildTags(request, program)
-  }
-}
-
-function generateName(request: GenerationRequest, rng: { pick: <T>(arr: T[]) => T }): string {
-  const prefixes: Record<Archetype, string[]> = {
-    ship: ['ISS', 'USS', 'HMS', 'CSV', 'NSV'],
-    station: ['Station', 'Orbital', 'Habitat', 'Port'],
-    outpost: ['Base', 'Outpost', 'Facility', 'Site']
-  }
-  
-  const names = [
-    'Horizon', 'Vanguard', 'Pioneer', 'Endeavour', 'Prometheus',
-    'Artemis', 'Helios', 'Nova', 'Zenith', 'Eclipse',
-    'Aurora', 'Stellar', 'Nebula', 'Cosmos', 'Orion'
-  ]
-  
-  const prefix = rng.pick(prefixes[request.archetype])
-  const name = rng.pick(names)
-  
-  return `${prefix} ${name}`
-}
-
-function buildTTRPGMetrics(program: RoomProgram, topology: TopologyGraph): TTRPGMetrics {
-  const primaryRooms = program.rooms.filter(r => r.importance === 'primary')
-  
-  // Estimate combat encounters based on room count
-  const combatEncounters = Math.floor(program.totalRooms / 8) + 1
-  
-  // Exploration time estimate (minutes per room roughly)
-  const explorationMinutes = program.totalRooms * 5
-  
-  return {
-    totalRooms: program.totalRooms,
-    totalConnectors: topology.connectors.length,
-    estimatedCombatEncounters: combatEncounters,
-    estimatedExplorationMinutes: explorationMinutes,
-    keyLocations: primaryRooms.length,
-    hiddenAreas: program.rooms.filter(r => r.accessLevel >= 3).length
-  }
-}
-
-function buildZones(program: RoomProgram): Array<{ id: string; label: string; color: string }> {
-  const zoneColors: Record<string, string> = {
-    core: '#ef4444',      // Red
-    crew: '#22c55e',      // Green
-    operations: '#3b82f6', // Blue
-    cargo: '#f59e0b',     // Amber
-    special: '#8b5cf6'    // Purple
-  }
-  
-  const zones: Array<{ id: string; label: string; color: string }> = []
-  
-  for (const [zone, count] of Object.entries(program.zoneDistribution)) {
-    if (count > 0) {
-      zones.push({
-        id: zone,
-        label: zone.charAt(0).toUpperCase() + zone.slice(1),
-        color: zoneColors[zone] || '#6b7280'
-      })
-    }
-  }
-  
-  return zones
-}
-
-function buildTags(request: GenerationRequest, program: RoomProgram): string[] {
-  const tags: string[] = [
-    request.archetype,
-    request.subtype,
-    request.sizeTier
-  ]
-  
-  // Add descriptive tags
-  if (request.loopiness !== undefined && request.loopiness > 0.7) {
-    tags.push('labyrinthine')
-  } else if (request.loopiness !== undefined && request.loopiness < 0.3) {
-    tags.push('linear')
-  }
-  
-  if (request.danger !== undefined && request.danger > 0.7) {
-    tags.push('high-danger')
-  }
-  
-  // Add room-based tags
-  const hasWeapons = program.rooms.some(r => r.tags.includes('military'))
-  const hasScience = program.rooms.some(r => r.tags.includes('science'))
-  const hasCargo = program.rooms.some(r => r.tags.includes('cargo'))
-  
-  if (hasWeapons) tags.push('armed')
-  if (hasScience) tags.push('research-capable')
-  if (hasCargo) tags.push('cargo-hauler')
-  
-  return tags
 }
 
 // ============================================================================
@@ -869,69 +664,3 @@ export function mapRoomTypeId(roomType: string): RoomType {
   
   return typeMap[roomType] || RoomTypeEnum.Generic
 }
-
-// ============================================================================
-// GRID ENGINE WRAPPER
-// ============================================================================
-
-/**
- * Generate map using the new grid-based engine
- */
-function generateMapWithGridEngine(options: GeneratorOptions): GenerationResult {
-  const gridOptions = {
-    seed: options.seed,
-    archetype: options.archetype,
-    subtype: options.subtype,
-    sizeTier: options.sizeTier,
-    styleProfile: options.styleProfile,
-    loopiness: options.loopiness,
-    danger: options.danger,
-    debug: false,
-  }
-  const result = (options.gridCandidateCount ?? DEFAULT_OPTIONS.gridCandidateCount) > 1
-    ? generateBestGridMap(gridOptions, options.gridCandidateCount)
-    : generateGridMap(gridOptions)
-
-  if (!result.success || !result.map) {
-    return {
-      success: false,
-      issues: [{
-        severity: 'error',
-        stage: 'generator',
-        message: result.error || 'Grid generation failed',
-      }],
-      timing: {
-        total: result.timing.total,
-        roomProgram: 0,
-        topology: 0,
-        layout: result.timing.hull + result.timing.zones + result.timing.spine + result.timing.rooms,
-        validation: 0,
-      },
-    }
-  }
-
-  // Convert MapJSON decks to DeckLayout format
-  const layouts: DeckLayout[] = result.map.decks.map(deck => ({
-    deckIndex: deck.index,
-    gridWidth: deck.gridWidth,
-    gridHeight: deck.gridHeight,
-    rooms: deck.rooms,
-    connectors: deck.connectors,
-    junctions: deck.junctions,
-  }))
-
-  return {
-    success: true,
-    map: result.map,
-    layouts,
-    issues: [],
-    timing: {
-      total: result.timing.total,
-      roomProgram: 0,
-      topology: result.timing.hull + result.timing.zones,
-      layout: result.timing.spine + result.timing.rooms + result.timing.doors,
-      validation: result.timing.convert,
-    },
-  }
-}
-
