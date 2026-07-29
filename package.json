@@ -9,10 +9,11 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --exclude scripts/__tests__/**",
+    "test:watch": "vitest --exclude scripts/__tests__/**",
     "typecheck": "tsc -b --pretty false",
-    "check": "npm run test && npm run lint && npm run typecheck && npm run build"
+    "check:generator-boundary": "node scripts/verify-production-generation-boundary.mjs",
+    "check": "npm run test && npm run lint && npm run typecheck && npm run check:generator-boundary && npm run build"
   },
   "dependencies": {
     "@pixi/react": "^7.1.2",
