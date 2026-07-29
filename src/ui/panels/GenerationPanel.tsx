@@ -26,6 +26,8 @@ import {
   type QualityMode,
   QUALITY_MODE_CONFIGS,
 } from '@generators/quality'
+import type { GenerationWorkerResponse } from '../../workers/generationProtocol'
+import { buildGenerationWorkerRequest } from './generationPanelModel'
 
 // TYPES
 interface GenerationPanelProps {
@@ -100,6 +102,7 @@ function fitViewportForEditorData(editorData: any): { x: number; y: number; zoom
 export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   const { dispatch } = useEditor()
   const abortControllerRef = useRef<AbortController | null>(null)
+  const activeRequestIdRef = useRef<string | null>(null)
 
   // Generation options
   const [archetype, setArchetype] = useState<Archetype>('ship')
@@ -310,87 +313,55 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       workerRef.current.terminate();
     }
 
+    const requestId = crypto.randomUUID()
+    activeRequestIdRef.current = requestId
+
     try {
       const worker = new Worker(new URL('../../workers/generation.worker.ts', import.meta.url), { type: 'module' });
       workerRef.current = worker;
 
-      worker.onmessage = (e) => {
-        const { type, payload } = e.data;
-        if (type === 'PROGRESS') {
-          if (useQualityPipeline) {
+      worker.onmessage = (event: MessageEvent<GenerationWorkerResponse>) => {
+        const message = event.data
+        if (
+          message.requestId !== requestId ||
+          activeRequestIdRef.current !== requestId
+        ) return
+
+        if (message.type === 'PROGRESS') {
+          setGenState(s => ({
+            ...s,
+            progress: message.progress,
+          }))
+          setPlainStatus(message.stage)
+        } else if (message.type === 'COMPLETE') {
+          if (message.format !== 'map-json-v1') {
             setGenState(s => ({
               ...s,
-              progress: payload.progress,
-              qualityPhase: payload.stage
-            }));
-            if (payload.message && payload.message.includes('Candidates:')) {
-              const match = payload.message.match(/Candidates: (\d+)/);
-              if (match) {
-                setGenState(s => ({ ...s, candidatesEvaluated: parseInt(match[1]) }));
-              }
-            }
-          } else {
-            setPlainStatus(payload.message || 'Processing...');
+              isGenerating: false,
+              error: 'Unsupported generation result format',
+            }))
+            worker.terminate()
+            workerRef.current = null
+            activeRequestIdRef.current = null
+            return
           }
-        } else if (type === 'COMPLETE') {
-          const mapData = payload; // map object
+          const mapData = message.map
 
           // Logic to convert mapData to newProject for Dispatch
           // This logic is moved from the main thread execution to here
           try {
-            // Check if Quality Result (PipelineResult) or Standard (MapJSON)
-            let editorData: any;
-            let name = useSeed;
-            let description = `${archetype} - ${subtype}`;
-            let metaData: any = {};
-
-            if (mapData.bestCandidate) { // PipelineResult
-              const best = mapData.bestCandidate.data;
-              // HACK: Reconstruct MapJSON-like structure for convertToEditorFormat
-              // Or manually build editorData.
-              // Given we can't easily import convertToEditorFormat inside the worker, 
-              // we rely on it being available here.
-
-              // BUT, if mapData is PipelineResult, it contains `mapData` (MapJSON Compat) in bestCandidate.data.mapData
-              // Let's check pipeline.ts: `bestCandidate.data` is `CandidateData`. 
-              // It DOES NOT seem to have `mapData` property?
-              // Wait, looking at lines 215 of original file:
-              // `if (pipelineResult.bestCandidate?.data.mapData) {`
-              // So it SEEMS it does have it?
-              // Let's assume the Worker returns the FULL object structure including mapData if available.
-
-              if (mapData.bestCandidate.data.mapData) {
-                const md = mapData.bestCandidate.data.mapData;
-                editorData = convertToEditorFormat(md, 0, routingOptions);
-                name = md.meta.name;
-                description = `${md.meta.archetype} - ${md.meta.subtype}`;
-                metaData = {
-                  generator: 'quality-pipeline',
-                  seed: useSeed,
-                  archetype, subtype, qualityMode,
-                  candidatesEvaluated: mapData.candidatesEvaluated,
-                  score: mapData.bestCandidate.score,
-                  ttrpgMetrics: md.meta.ttrpgMetrics
-                };
-              } else {
-                // Fallback if mapData missing
-                throw new Error("Quality pipeline result missing map data");
-              }
-
-            } else { // Standard MapJSON
-              editorData = convertToEditorFormat(mapData, 0, routingOptions);
-              name = mapData.meta.name;
-              description = `${mapData.meta.archetype} - ${mapData.meta.subtype}`;
-              metaData = {
-                generator: 'procedural',
-                seed: mapData.meta.seed,
-                masterSeed: mapData.meta.candidateSelection?.masterSeed ?? useSeed,
-                archetype, subtype,
-                candidatesEvaluated: mapData.meta.candidateSelection?.evaluatedCandidates ?? 1,
-                candidateSelection: mapData.meta.candidateSelection,
-                ttrpgMetrics: mapData.meta.ttrpgMetrics
-              };
-            }
+            const editorData = convertToEditorFormat(mapData, 0, routingOptions);
+            const name = mapData.meta.name;
+            const description = `${mapData.meta.archetype} - ${mapData.meta.subtype}`;
+            const metaData = {
+              generator: 'procedural',
+              seed: mapData.meta.seed,
+              masterSeed: mapData.meta.candidateSelection?.masterSeed ?? useSeed,
+              archetype, subtype,
+              candidatesEvaluated: mapData.meta.candidateSelection?.evaluatedCandidates ?? 1,
+              candidateSelection: mapData.meta.candidateSelection,
+              ttrpgMetrics: mapData.meta.ttrpgMetrics
+            };
 
             const newDeck = {
               id: crypto.randomUUID(),
@@ -472,46 +443,52 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
 
           worker.terminate();
           workerRef.current = null;
+          activeRequestIdRef.current = null;
 
-        } else if (type === 'ERROR') {
-          setGenState(s => ({ ...s, isGenerating: false, error: payload.message }));
+        } else if (message.type === 'ERROR') {
+          setGenState(s => ({ ...s, isGenerating: false, error: message.message }));
           worker.terminate();
           workerRef.current = null;
+          activeRequestIdRef.current = null;
+        } else if (message.type === 'CANCELLED') {
+          setGenState(s => ({ ...s, isGenerating: false, error: 'Cancelled' }));
+          worker.terminate();
+          workerRef.current = null;
+          activeRequestIdRef.current = null;
         }
       };
 
+      worker.onerror = () => {
+        if (activeRequestIdRef.current !== requestId) return
+        setGenState(s => ({ ...s, isGenerating: false, error: 'Generation worker failed' }))
+        worker.terminate()
+        workerRef.current = null
+        activeRequestIdRef.current = null
+      }
+
       // Start
-      worker.postMessage({
-        type: 'START_GENERATION',
-        payload: {
-          seed: useSeed,
-          archetype,
-          subtype,
-          sizeTier,
-          styleProfile,
-          loopiness,
-          danger,
-          useQuality: useQualityPipeline,
-          qualityMode,
-          engine: generatorEngine,
-          routing: {
-            coalesceEnabled,
-            bendPenalty,
-            reuseBonus,
-            crossingPenalty,
-          }
-        }
-      });
+      worker.postMessage(buildGenerationWorkerRequest(requestId, {
+        seed: useSeed,
+        archetype,
+        subtype,
+        sizeTier,
+        styleProfile,
+        loopiness,
+        danger,
+        qualityProfile: qualityMode,
+      }));
 
     } catch (error: any) {
+      activeRequestIdRef.current = null
       setGenState(s => ({ ...s, isGenerating: false, error: error.message }));
     }
 
-  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, useQualityPipeline, qualityMode, generatorEngine, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, dispatch, onClose, generateRandomSeed, addToSeedHistory])
+  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, qualityMode, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, generateRandomSeed, addToSeedHistory])
 
   const handleCancel = useCallback(() => {
-    if (workerRef.current) {
-      workerRef.current.postMessage({ type: 'CANCEL' });
+    const requestId = activeRequestIdRef.current
+    if (workerRef.current && requestId) {
+      workerRef.current.postMessage({ type: 'CANCEL', requestId });
     }
     setGenState(s => ({ ...s, isGenerating: false, error: 'Cancelled' }));
   }, []);
