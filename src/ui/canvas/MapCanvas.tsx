@@ -2,8 +2,21 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import { Application, Graphics, Container, Text, TextStyle, Rectangle, Polygon } from 'pixi.js'
 import { useEditor, actions } from '@store/EditorContext'
 import { DuplicateIcon, TrashIcon, BringToFrontIcon, SendToBackIcon, SelectAllIcon, RoomIcon } from '@ui/components/Icons'
-import { EditorTool, CorridorStyle, DoorType, type Rect, type Point, type Room, type Door, type CorridorAttachment, type CorridorJunction, type CorridorLineJump, ROOM_TYPE_CONFIGS } from '@core/types'
-import { snapToRoomWall, autoRouteCorridor, checkCorridorRoomCollision, updateCorridorAttachments } from '@core/corridorPathfinding'
+import { EditorTool, CorridorStyle, DoorType, type Rect, type Point, type Room, type Door, type Corridor, type CorridorAttachment, type CorridorJunction, type CorridorLineJump, ROOM_TYPE_CONFIGS } from '@core/types'
+import { snapToRoomWall, autoRouteCorridor, checkCorridorRoomCollision } from '@core/corridorPathfinding'
+import {
+  detachCorridorFromRoom,
+  moveRoomWithContents,
+  reconcileAttachedCorridor,
+} from '@core/geometryEdit'
+import {
+  findEndpointSnapCandidate,
+  shouldPreserveAttachments,
+  updateCorridorPoint,
+  type EndpointSnapCandidate,
+} from '@core/editorInteractions'
+import { beginRightMousePan, idleRightMousePan, updateRightMousePan } from './rightMousePan'
+import { buildDeckGeometryRenderPaths, type RenderPolygon } from './deckGeometry'
 
 // Helper to convert hex string to number
 function hexToNumber(hex: string): number {
@@ -99,12 +112,134 @@ function pointToSegmentDistance(point: Point, start: Point, end: Point): number 
   return Math.sqrt((point.x - closestX) ** 2 + (point.y - closestY) ** 2)
 }
 
+function samePoint(a: Point, b: Point, tolerance = 0.5): boolean {
+  return Math.abs(a.x - b.x) <= tolerance && Math.abs(a.y - b.y) <= tolerance
+}
+
+function isCorridorAttachedToRoom(corridor: Corridor, roomId: string): boolean {
+  return (
+    corridor.startAttachment?.roomId === roomId ||
+    corridor.endAttachment?.roomId === roomId ||
+    (corridor.startAnchor?.kind === 'roomPort' && corridor.startAnchor.roomId === roomId) ||
+    (corridor.endAnchor?.kind === 'roomPort' && corridor.endAnchor.roomId === roomId)
+  )
+}
+
+function orthogonalizeSegment(start: Point, end: Point): Array<{ start: Point; end: Point }> {
+  if (samePoint(start, end)) return []
+  if (start.x === end.x || start.y === end.y) {
+    return [{ start, end }]
+  }
+
+  const bend = { x: end.x, y: start.y }
+  return [
+    { start, end: bend },
+    { start: bend, end },
+  ].filter(segment => !samePoint(segment.start, segment.end))
+}
+
+function getRenderableCorridorSegments(corridor: Corridor): Array<{ start: Point; end: Point }> {
+  return corridor.segments.flatMap(segment => orthogonalizeSegment(segment.start, segment.end))
+}
+
+function orthogonalizeSegments(segments: Array<{ start: Point; end: Point }>): Array<{ start: Point; end: Point }> {
+  return segments.flatMap(segment => orthogonalizeSegment(segment.start, segment.end))
+}
+
+function getCorridorPathChains(corridor: Corridor): Point[][] {
+  const segments = getRenderableCorridorSegments(corridor)
+  if (segments.length === 0) return []
+
+  const chains: Point[][] = []
+  let current: Point[] = []
+
+  for (const segment of segments) {
+    if (current.length === 0) {
+      current = [segment.start, segment.end]
+      continue
+    }
+
+    const last = current[current.length - 1]
+    if (samePoint(last, segment.start)) {
+      if (!samePoint(last, segment.end)) {
+        current.push(segment.end)
+      }
+      continue
+    }
+
+    if (current.length >= 2) {
+      chains.push(current)
+    }
+    current = [segment.start, segment.end]
+  }
+
+  if (current.length >= 2) {
+    chains.push(current)
+  }
+
+  return chains
+}
+
+function strokePolyline(
+  graphics: Graphics,
+  points: Point[],
+  width: number,
+  color: number,
+  alpha: number,
+  offset: Point = { x: 0, y: 0 }
+) {
+  if (points.length < 2) return
+
+  graphics.lineStyle({
+    width,
+    color,
+    alpha,
+    join: 'round' as any,
+    cap: 'round' as any,
+  })
+  graphics.moveTo(points[0].x + offset.x, points[0].y + offset.y)
+  for (let i = 1; i < points.length; i++) {
+    graphics.lineTo(points[i].x + offset.x, points[i].y + offset.y)
+  }
+}
+
+function drawCorridorPresentationSkin(
+  graphics: Graphics,
+  corridors: Corridor[],
+  wallColor: number,
+  floorColor: number,
+  shadowColor: number
+) {
+  for (const corridor of corridors) {
+    const width = Math.min(Math.max(corridor.width || 20, 14), 28)
+    for (const points of getCorridorPathChains(corridor)) {
+      strokePolyline(graphics, points, width + 12, shadowColor, 0.34, { x: 5, y: 7 })
+    }
+  }
+
+  for (const corridor of corridors) {
+    const width = Math.min(Math.max(corridor.width || 20, 14), 28)
+    for (const points of getCorridorPathChains(corridor)) {
+      strokePolyline(graphics, points, width + 8, wallColor, 0.98)
+    }
+  }
+
+  for (const corridor of corridors) {
+    const width = Math.min(Math.max(corridor.width || 20, 14), 28)
+    for (const points of getCorridorPathChains(corridor)) {
+      strokePolyline(graphics, points, width, floorColor, 0.92)
+    }
+  }
+}
+
 // Drag state interface
 interface DragState {
   isDragging: boolean
   roomId: string | null
   startPos: Point | null
-  roomStartBounds: Rect | null
+  roomSnapshot: Room | null
+  attachedCorridorSnapshots: Corridor[]
+  detachAttachments: boolean
 }
 
 // Corridor drag state
@@ -113,6 +248,8 @@ interface CorridorDragState {
   corridorId: string | null
   startPos: Point | null
   originalSegments: Array<{ start: Point; end: Point }> | null
+  corridorSnapshot: Corridor | null
+  preserveAttachments: boolean
 }
 
 // Corridor point edit state (for resizing corridors)
@@ -122,7 +259,12 @@ interface CorridorPointEditState {
   segmentIndex: number | null
   pointType: 'start' | 'end' | null
   startPos: Point | null
+  corridorSnapshot: Corridor | null
+  endpoint: 'start' | 'end' | null
+  preserveAttachments: boolean
+  snapCandidate: EndpointSnapCandidate | null
 }
+
 
 // Resize state interface
 interface ResizeState {
@@ -179,14 +321,39 @@ interface SegmentSelection {
   segmentIndex: number
 }
 
+function drawRenderPolygon(graphics: Graphics, polygon: RenderPolygon): void {
+  if (polygon.outer.length < 3) return
+
+  graphics.drawPolygon(new Polygon(polygon.outer.flatMap(point => [point.x, point.y])))
+  for (const hole of polygon.holes) {
+    if (hole.length < 3) continue
+    graphics.beginHole()
+    graphics.drawPolygon(new Polygon(hole.flatMap(point => [point.x, point.y])))
+    graphics.endHole()
+  }
+}
+
+function strokeRenderPolygon(graphics: Graphics, polygon: RenderPolygon): void {
+  if (polygon.outer.length < 3) return
+
+  const points = [...polygon.outer, polygon.outer[0]]
+  graphics.moveTo(points[0].x, points[0].y)
+  for (let index = 1; index < points.length; index++) {
+    graphics.lineTo(points[index].x, points[index].y)
+  }
+}
+
 export function MapCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
   const gridRef = useRef<Graphics | null>(null)
+  const geometryContainerRef = useRef<Container | null>(null)
   const roomsContainerRef = useRef<Container | null>(null)
   const corridorsContainerRef = useRef<Container | null>(null)
   const junctionsContainerRef = useRef<Container | null>(null)
   const previewRef = useRef<Graphics | null>(null)
+  const rightMousePanRef = useRef(idleRightMousePan())
+  const gestureCancelledRef = useRef(false)
   const [isReady, setIsReady] = useState(false)
   
   // Space key for temporary pan mode
@@ -197,7 +364,9 @@ export function MapCanvas() {
     isDragging: false,
     roomId: null,
     startPos: null,
-    roomStartBounds: null,
+    roomSnapshot: null,
+    attachedCorridorSnapshots: [],
+    detachAttachments: false,
   })
   const [resizeState, setResizeState] = useState<ResizeState>({
     isResizing: false,
@@ -228,6 +397,8 @@ export function MapCanvas() {
     corridorId: null,
     startPos: null,
     originalSegments: null,
+    corridorSnapshot: null,
+    preserveAttachments: true,
   })
   
   // Corridor point edit state (for resizing)
@@ -237,6 +408,10 @@ export function MapCanvas() {
     segmentIndex: null,
     pointType: null,
     startPos: null,
+    corridorSnapshot: null,
+    endpoint: null,
+    preserveAttachments: true,
+    snapCandidate: null,
   })
   
   // Marquee selection state
@@ -269,8 +444,10 @@ export function MapCanvas() {
     drawStartPoint,
     drawCurrentPoint,
     selection,
-    hoveredId 
+    hoveredId,
+    preserveAttachments,
   } = state
+  const showTopologyMarkers = selection.type === 'corridor' || selection.type === 'corridor-segment'
 
   // Clear segment selection when switching away from corridor selection
   useEffect(() => {
@@ -334,6 +511,12 @@ export function MapCanvas() {
         grid.name = 'grid'
         worldContainer.addChild(grid)
         gridRef.current = grid
+
+        // Facility envelope and structural voids (above grid, below map content)
+        const geometryContainer = new Container()
+        geometryContainer.name = 'facility-geometry'
+        worldContainer.addChild(geometryContainer)
+        geometryContainerRef.current = geometryContainer
 
         // Create corridors container (below rooms)
         const corridorsContainer = new Container()
@@ -439,6 +622,44 @@ export function MapCanvas() {
 
   }, [showGrid, viewport, gridSize, activeTheme.gridColor, isReady])
 
+  // Draw canonical facility envelope and structural voids.
+  useEffect(() => {
+    if (!geometryContainerRef.current || !isReady) return
+
+    const container = geometryContainerRef.current
+    container.removeChildren()
+
+    const paths = buildDeckGeometryRenderPaths(activeDeck?.geometry, gridSize)
+    if (paths.envelope.length === 0) return
+
+    const graphics = new Graphics()
+    const wallColor = hexToNumber(activeTheme.wallColor)
+    const backgroundColor = hexToNumber(activeTheme.backgroundColor)
+    const accentColor = hexToNumber(activeTheme.accentColor)
+
+    graphics.lineStyle(0)
+    graphics.beginFill(wallColor, 0.09)
+    for (const polygon of paths.envelope) {
+      drawRenderPolygon(graphics, polygon)
+    }
+    graphics.endFill()
+
+    graphics.lineStyle(4, wallColor, 0.9)
+    for (const polygon of paths.envelope) {
+      strokeRenderPolygon(graphics, polygon)
+    }
+
+    for (const structuralVoid of paths.structuralVoids) {
+      graphics.lineStyle(2, accentColor, 0.65)
+      graphics.beginFill(backgroundColor, 0.92)
+      drawRenderPolygon(graphics, structuralVoid)
+      graphics.endFill()
+      strokeRenderPolygon(graphics, structuralVoid)
+    }
+
+    container.addChild(graphics)
+  }, [activeDeck?.geometry, activeTheme, gridSize, isReady])
+
   // Draw rooms
   useEffect(() => {
     if (!roomsContainerRef.current || !isReady) return
@@ -458,19 +679,36 @@ export function MapCanvas() {
       // Draw room fill - PixiJS 7.x API
       const fillColor = hexToNumber(room.color || roomConfig.defaultColor)
       const borderColor = hexToNumber(room.borderColor || roomConfig.borderColor)
+      const cornerRadius = Math.min(16, Math.max(5, Math.min(room.bounds.width, room.bounds.height) * 0.12))
       
-      graphics.beginFill(fillColor, 0.7)
+      graphics.beginFill(0x000000, activeTheme.backgroundColor === '#ffffff' ? 0.08 : 0.34)
+      graphics.drawRoundedRect(
+        room.bounds.x + 5,
+        room.bounds.y + 7,
+        room.bounds.width,
+        room.bounds.height,
+        cornerRadius
+      )
+      graphics.endFill()
+
+      graphics.beginFill(fillColor, activeTheme.backgroundColor === '#ffffff' ? 0.12 : 0.58)
       graphics.lineStyle(
-        isSelected ? 3 : isHovered ? 2 : 1.5, 
+        isSelected ? 4 : isHovered ? 3 : 2.5,
         isSelected ? 0x00ff9f : isHovered ? 0x00d4ff : borderColor
       )
-      graphics.drawRect(room.bounds.x, room.bounds.y, room.bounds.width, room.bounds.height)
+      graphics.drawRoundedRect(room.bounds.x, room.bounds.y, room.bounds.width, room.bounds.height, cornerRadius)
       graphics.endFill()
 
       // Add selection glow effect
       if (isSelected) {
         graphics.lineStyle(6, 0x00ff9f, 0.3)
-        graphics.drawRect(room.bounds.x - 2, room.bounds.y - 2, room.bounds.width + 4, room.bounds.height + 4)
+        graphics.drawRoundedRect(
+          room.bounds.x - 3,
+          room.bounds.y - 3,
+          room.bounds.width + 6,
+          room.bounds.height + 6,
+          cornerRadius + 3
+        )
       }
       
       // Draw doors
@@ -576,9 +814,12 @@ export function MapCanvas() {
       // Add room label - PixiJS 7.x API
       const textStyle = new TextStyle({
         fontFamily: 'JetBrains Mono, monospace',
-        fontSize: 12,
+        fontSize: Math.max(10, Math.min(14, Math.floor(Math.min(room.bounds.width, room.bounds.height) / 5))),
         fill: activeTheme.textColor,
         align: 'center',
+        fontWeight: '600',
+        wordWrap: true,
+        wordWrapWidth: Math.max(40, room.bounds.width - 16),
       })
       
       const label = new Text(room.name || roomConfig.name, textStyle)
@@ -586,14 +827,8 @@ export function MapCanvas() {
       label.x = room.bounds.x + room.bounds.width / 2 - label.width / 2
       label.y = room.bounds.y + room.bounds.height / 2 - label.height / 2
 
-      // Add icon
-      const icon = new Text(roomConfig.icon, new TextStyle({ fontSize: 16 }))
-      icon.x = room.bounds.x + 4
-      icon.y = room.bounds.y + 4
-
       container.addChild(graphics)
       container.addChild(label)
-      container.addChild(icon)
 
       // Make room interactive - PixiJS 7.x API
       graphics.interactive = true
@@ -608,6 +843,7 @@ export function MapCanvas() {
       graphics.on('pointerover', () => dispatch(actions.setHovered(room.id)))
       graphics.on('pointerout', () => dispatch(actions.setHovered(null)))
       graphics.on('pointerdown', (e) => {
+        if (e.button !== 0) return
         if (activeTool === EditorTool.Select) {
           e.stopPropagation()
           
@@ -626,12 +862,18 @@ export function MapCanvas() {
           
           // Start dragging (only if not multi-selecting)
           if (!shiftKey) {
+            gestureCancelledRef.current = false
             const worldPos = screenToWorld(e.global.x, e.global.y)
+            const altKey = Boolean((e.data.originalEvent as unknown as PointerEvent)?.altKey)
             setDragState({
               isDragging: true,
               roomId: room.id,
               startPos: worldPos,
-              roomStartBounds: { ...room.bounds },
+              roomSnapshot: structuredClone(room),
+              attachedCorridorSnapshots: corridors
+                .filter(corridor => isCorridorAttachedToRoom(corridor, room.id))
+                .map(corridor => structuredClone(corridor)),
+              detachAttachments: !shouldPreserveAttachments(preserveAttachments, altKey),
             })
           }
         }
@@ -666,6 +908,7 @@ export function MapCanvas() {
           )
           
           handleGraphics.on('pointerdown', (e) => {
+            if (e.button !== 0) return
             e.stopPropagation()
             const worldPos = screenToWorld(e.global.x, e.global.y)
             setResizeState({
@@ -681,7 +924,7 @@ export function MapCanvas() {
         }
       }
     }
-  }, [activeDeck, rooms, selection, hoveredId, activeTheme, activeTool, dispatch, isReady, screenToWorld])
+  }, [activeDeck, rooms, corridors, selection, hoveredId, activeTheme, activeTool, dispatch, isReady, screenToWorld, gridSize, preserveAttachments])
 
   // Draw corridors
   useEffect(() => {
@@ -692,6 +935,14 @@ export function MapCanvas() {
 
     if (!activeDeck || !corridors.length) return
 
+    const presentationSkin = new Graphics()
+    const wallColor = hexToNumber(activeTheme.wallColor)
+    const isLightTheme = activeTheme.backgroundColor === '#ffffff'
+    const floorColor = isLightTheme ? 0xfffbeb : 0x1f2937
+    const shadowColor = isLightTheme ? 0xfacc15 : 0x000000
+    drawCorridorPresentationSkin(presentationSkin, corridors, wallColor, floorColor, shadowColor)
+    container.addChild(presentationSkin)
+
     for (const corridor of corridors) {
       const graphics = new Graphics()
       const isSelected =
@@ -701,65 +952,11 @@ export function MapCanvas() {
         selectedSegment && selectedSegment.corridorId === corridor.id ? selectedSegment.segmentIndex : null
       const isHovered = hoveredId === corridor.id
       
-      // Draw corridor as a unified path with proper joins
-      const corridorColor = hexToNumber(corridor.color || activeTheme.wallColor)
-      const corridorWidth = Math.min(corridor.width || 20, 24) // Thinner corridors
-      
-      const fillColor = isSelected ? 0x00ff9f : isHovered ? 0x00d4ff : corridorColor
-      const fillAlpha = isSelected ? 0.6 : 0.4
-      
-      // Collect all points for the corridor path
-      const pathPoints: Point[] = []
-      if (corridor.segments.length > 0) {
-        pathPoints.push(corridor.segments[0].start)
-        for (const segment of corridor.segments) {
-          pathPoints.push(segment.end)
-        }
-      }
-      
-      if (pathPoints.length >= 2) {
-        // Draw corridor fill as a thick polyline with round joins
-        graphics.lineStyle({
-          width: corridorWidth,
-          color: fillColor,
-          alpha: fillAlpha,
-          join: 'round' as any, // Round joins for smooth corners
-          cap: 'round' as any,  // Round caps for endpoints
-        })
-        graphics.moveTo(pathPoints[0].x, pathPoints[0].y)
-        for (let i = 1; i < pathPoints.length; i++) {
-          graphics.lineTo(pathPoints[i].x, pathPoints[i].y)
-        }
-        
-        // Draw corridor border/outline
-        graphics.lineStyle({
-          width: isSelected ? 3 : 2,
-          color: fillColor,
-          alpha: 1,
-          join: 'round' as any,
-          cap: 'round' as any,
-        })
-        graphics.moveTo(pathPoints[0].x, pathPoints[0].y)
-        for (let i = 1; i < pathPoints.length; i++) {
-          graphics.lineTo(pathPoints[i].x, pathPoints[i].y)
-        }
-        
-        // Draw inner line for visual detail
-        graphics.lineStyle({
-          width: Math.max(2, corridorWidth * 0.3),
-          color: 0x0a1628,
-          alpha: 0.3,
-          join: 'round' as any,
-          cap: 'round' as any,
-        })
-        graphics.moveTo(pathPoints[0].x, pathPoints[0].y)
-        for (let i = 1; i < pathPoints.length; i++) {
-          graphics.lineTo(pathPoints[i].x, pathPoints[i].y)
-        }
-      }
+      const corridorWidth = Math.min(Math.max(corridor.width || 20, 14), 28)
+      const renderableSegments = getRenderableCorridorSegments(corridor)
       
       // Build hit area from segments
-      for (const segment of corridor.segments) {
+      for (const segment of renderableSegments) {
         // Draw invisible thick rectangle for hit detection
         const dx = segment.end.x - segment.start.x
         const dy = segment.end.y - segment.start.y
@@ -780,8 +977,8 @@ export function MapCanvas() {
       }
       
       // Highlight a specific segment if chosen
-      if (highlightedSegment !== null && corridor.segments[highlightedSegment]) {
-        const seg = corridor.segments[highlightedSegment]
+      if (highlightedSegment !== null && renderableSegments[highlightedSegment]) {
+        const seg = renderableSegments[highlightedSegment]
         graphics.lineStyle({
           width: corridorWidth + 6,
           color: 0x00ff9f,
@@ -793,6 +990,18 @@ export function MapCanvas() {
         graphics.lineTo(seg.end.x, seg.end.y)
       }
 
+      if (isSelected || isHovered) {
+        for (const points of getCorridorPathChains(corridor)) {
+          strokePolyline(
+            graphics,
+            points,
+            corridorWidth + (isSelected ? 8 : 5),
+            isSelected ? 0x00ff9f : 0x00d4ff,
+            isSelected ? 0.72 : 0.48
+          )
+        }
+      }
+
       // Make corridor interactive
       graphics.interactive = true
       graphics.cursor = 'pointer'
@@ -801,18 +1010,24 @@ export function MapCanvas() {
       graphics.on('pointerover', () => dispatch(actions.setHovered(corridor.id)))
       graphics.on('pointerout', () => dispatch(actions.setHovered(null)))
       graphics.on('pointerdown', (e) => {
+        if (e.button !== 0) return
         if (activeTool === EditorTool.Select) {
           e.stopPropagation()
           
-          // Shift+click for multi-select, Alt+click for segment selection
+          // Shift+click for multi-select, Ctrl/Cmd+click for segment selection.
+          // Alt is reserved for temporary attachment-mode inversion.
           const shiftKey = (e.data.originalEvent as unknown as PointerEvent)?.shiftKey
           const altKey = (e.data.originalEvent as unknown as PointerEvent)?.altKey
+          const segmentSelectKey = Boolean(
+            (e.data.originalEvent as unknown as PointerEvent)?.ctrlKey ||
+            (e.data.originalEvent as unknown as PointerEvent)?.metaKey
+          )
           const worldPos = screenToWorld(e.global.x, e.global.y)
 
           // Determine nearest segment to click for highlighting
           let nearestIndex: number | null = null
           let nearestDist = Infinity
-          corridor.segments.forEach((seg, idx) => {
+          renderableSegments.forEach((seg, idx) => {
             const dist = pointToSegmentDistance(worldPos, seg.start, seg.end)
             if (dist < nearestDist) {
               nearestDist = dist
@@ -826,8 +1041,8 @@ export function MapCanvas() {
             setSelectedSegment(null)
           }
 
-          // Alt+click: select specific segment only
-          if (altKey && nearestIndex !== null && nearestDist <= selectThreshold) {
+          // Ctrl/Cmd+click: select a specific segment only.
+          if (segmentSelectKey && nearestIndex !== null && nearestDist <= selectThreshold) {
             const segmentId = `${corridor.id}:${nearestIndex}`
             dispatch(actions.select({ type: 'corridor-segment', ids: [segmentId] }))
             return // Don't start corridor drag when selecting segment
@@ -845,14 +1060,17 @@ export function MapCanvas() {
 
           // Start dragging corridor (only if not multi-selecting)
           if (!shiftKey) {
+            gestureCancelledRef.current = false
             setCorridorDragState({
               isDragging: true,
               corridorId: corridor.id,
               startPos: worldPos,
-              originalSegments: corridor.segments.map(s => ({ 
+              originalSegments: renderableSegments.map(s => ({
                 start: { ...s.start }, 
                 end: { ...s.end } 
               })),
+              corridorSnapshot: structuredClone(corridor),
+              preserveAttachments: shouldPreserveAttachments(preserveAttachments, Boolean(altKey)),
             })
           }
         }
@@ -860,12 +1078,11 @@ export function MapCanvas() {
       
       container.addChild(graphics)
       
-      // Draw segment points for all corridors (not just selected) - more intuitive interaction
-      // Collect unique points
+      const shouldShowEditPoints = isSelected || isHovered
       const uniquePoints: { x: number; y: number; segmentIndex: number; pointType: 'start' | 'end' }[] = []
       
-      for (let segIdx = 0; segIdx < corridor.segments.length; segIdx++) {
-        const segment = corridor.segments[segIdx]
+      for (let segIdx = 0; segIdx < renderableSegments.length; segIdx++) {
+        const segment = renderableSegments[segIdx]
         
         // Add start point (check if not duplicate)
         const hasStartPoint = uniquePoints.some(p => 
@@ -894,13 +1111,16 @@ export function MapCanvas() {
           }
         }
         
-        // Draw each point
+      if (!shouldShowEditPoints) {
+        continue
+      }
+
       for (const pt of uniquePoints) {
         const pointGraphics = new Graphics()
         
         // Check if this point has an attachment
         const isStartPoint = pt.segmentIndex === 0 && pt.pointType === 'start'
-        const isEndPoint = pt.segmentIndex === corridor.segments.length - 1 && pt.pointType === 'end'
+        const isEndPoint = pt.segmentIndex === renderableSegments.length - 1 && pt.pointType === 'end'
         const hasAttachment = (isStartPoint && corridor.startAttachment) || (isEndPoint && corridor.endAttachment)
         
         // Point size based on selection/hover state
@@ -925,35 +1145,30 @@ export function MapCanvas() {
         
         // Left click - select corridor AND start dragging point
         pointGraphics.on('pointerdown', (e) => {
-          // Right click - show context menu
-          if (e.button === 2) {
-            e.stopPropagation()
-            // Select the corridor first
-            dispatch(actions.select({ type: 'corridor', ids: [corridor.id] }))
-            setContextMenu({
-              isOpen: true,
-              x: e.global.x,
-              y: e.global.y,
-              targetType: 'corridor-point',
-              targetId: corridor.id,
-              segmentIndex: pt.segmentIndex,
-              pointType: pt.pointType,
-              worldPos: { x: pt.x, y: pt.y },
-            })
-            return
-          }
-          
+          if (e.button !== 0) return
           e.stopPropagation()
+          gestureCancelledRef.current = false
           // Select the corridor first for visual feedback
           dispatch(actions.select({ type: 'corridor', ids: [corridor.id] }))
           
           const worldPos = screenToWorld(e.global.x, e.global.y)
+          const altKey = Boolean((e.data.originalEvent as unknown as PointerEvent)?.altKey)
+          const endpoint =
+            pt.segmentIndex === 0 && pt.pointType === 'start'
+              ? 'start'
+              : pt.segmentIndex === renderableSegments.length - 1 && pt.pointType === 'end'
+                ? 'end'
+                : null
           setCorridorPointEdit({
             isEditing: true,
             corridorId: corridor.id,
             segmentIndex: pt.segmentIndex,
             pointType: pt.pointType,
             startPos: worldPos,
+            corridorSnapshot: structuredClone(corridor),
+            endpoint,
+            preserveAttachments: shouldPreserveAttachments(preserveAttachments, altKey),
+            snapCandidate: null,
           })
         })
         
@@ -962,7 +1177,7 @@ export function MapCanvas() {
     }
     
     console.log('Corridors drawn:', corridors.length)
-  }, [activeDeck, corridors, activeTheme, isReady, selection, hoveredId, activeTool, dispatch, screenToWorld])
+  }, [activeDeck, corridors, activeTheme, isReady, selection, selectedSegment, hoveredId, activeTool, dispatch, screenToWorld, preserveAttachments])
 
   // Draw junctions and line jumps
   useEffect(() => {
@@ -970,6 +1185,8 @@ export function MapCanvas() {
     
     const container = junctionsContainerRef.current
     container.removeChildren()
+
+    if (!showTopologyMarkers) return
 
     // Draw junctions (T, X, hub, etc.)
     for (const junction of junctions) {
@@ -1068,34 +1285,7 @@ export function MapCanvas() {
     if (junctions.length > 0 || lineJumps.length > 0) {
       console.log('Junctions/LineJumps drawn:', junctions.length, lineJumps.length)
     }
-  }, [junctions, lineJumps, isReady])
-
-  // Update attached corridors when rooms change position/size
-  useEffect(() => {
-    if (!rooms.length || !corridors.length) return
-    
-    // Check each corridor for attachments and update if needed
-    for (const corridor of corridors) {
-      if (corridor.startAttachment || corridor.endAttachment) {
-        const updated = updateCorridorAttachments(corridor, rooms)
-        
-        // Check if segments actually changed
-        const startChanged = corridor.startAttachment && 
-          corridor.segments.length > 0 &&
-          (updated.segments[0].start.x !== corridor.segments[0].start.x ||
-           updated.segments[0].start.y !== corridor.segments[0].start.y)
-        
-        const endChanged = corridor.endAttachment && 
-          corridor.segments.length > 0 &&
-          (updated.segments[updated.segments.length - 1].end.x !== corridor.segments[corridor.segments.length - 1].end.x ||
-           updated.segments[updated.segments.length - 1].end.y !== corridor.segments[corridor.segments.length - 1].end.y)
-        
-        if (startChanged || endChanged) {
-          dispatch(actions.updateCorridor(corridor.id, { segments: updated.segments }))
-        }
-      }
-    }
-  }, [rooms, corridors, dispatch])
+  }, [junctions, lineJumps, isReady, showTopologyMarkers])
 
   // Draw preview while drawing room
   useEffect(() => {
@@ -1154,7 +1344,7 @@ export function MapCanvas() {
           const segmentColor = routeResult.segments.length > 1 ? autoRouteColor : corridorColor
           preview.lineStyle(corridorWidth, segmentColor, 0.3)
           
-          for (const segment of routeResult.segments) {
+          for (const segment of orthogonalizeSegments(routeResult.segments)) {
             preview.moveTo(segment.start.x, segment.start.y)
             preview.lineTo(segment.end.x, segment.end.y)
           }
@@ -1186,10 +1376,12 @@ export function MapCanvas() {
             }
           }
         } else {
-          // Simple line preview (no auto-routing)
+          // Simple orthogonal preview (no auto-routing)
           preview.lineStyle(corridorWidth, corridorColor, 0.2)
-          preview.moveTo(lastPoint.x, lastPoint.y)
-          preview.lineTo(corridorDrawState.currentPoint.x, corridorDrawState.currentPoint.y)
+          for (const segment of orthogonalizeSegment(lastPoint, corridorDrawState.currentPoint)) {
+            preview.moveTo(segment.start.x, segment.start.y)
+            preview.lineTo(segment.end.x, segment.end.y)
+          }
         }
       }
       
@@ -1232,14 +1424,25 @@ export function MapCanvas() {
       preview.drawRect(minX + width - cornerSize / 2, minY + height - cornerSize / 2, cornerSize, cornerSize)
       preview.endFill()
     }
-  }, [isDrawing, drawStartPoint, drawCurrentPoint, activeRoomType, isReady, corridorDrawState, gridSize, rooms, corridors, marqueeState])
+
+    if (corridorPointEdit.snapCandidate) {
+      const { position } = corridorPointEdit.snapCandidate
+      preview.lineStyle(3, 0x00ff9f, 1)
+      preview.beginFill(0x00ff9f, 0.18)
+      preview.drawCircle(position.x, position.y, 12)
+      preview.endFill()
+    }
+  }, [isDrawing, drawStartPoint, drawCurrentPoint, activeRoomType, isReady, corridorDrawState, gridSize, rooms, corridors, marqueeState, corridorPointEdit.snapCandidate])
 
   // Handle mouse events
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (!containerRef.current) return
     
-    // Ignore right click (used for panning)
-    if (e.button === 2) return
+    if (e.button === 2) {
+      rightMousePanRef.current = beginRightMousePan(e.clientX, e.clientY)
+      setContextMenu(previous => previous.isOpen ? { ...previous, isOpen: false } : previous)
+      return
+    }
 
     const rect = containerRef.current.getBoundingClientRect()
     const screenX = e.clientX - rect.left
@@ -1374,18 +1577,25 @@ export function MapCanvas() {
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!containerRef.current) return
 
+    const isRightMouseDown = (e.buttons & 2) === 2
+    if (isRightMouseDown) {
+      rightMousePanRef.current = updateRightMousePan(
+        rightMousePanRef.current, e.clientX, e.clientY
+      )
+    }
+
     const rect = containerRef.current.getBoundingClientRect()
     const screenX = e.clientX - rect.left
     const screenY = e.clientY - rect.top
     const worldPos = screenToWorld(screenX, screenY)
 
     // Handle room dragging
-    if (dragState.isDragging && dragState.roomId && dragState.startPos && dragState.roomStartBounds) {
+    if (dragState.isDragging && dragState.roomId && dragState.startPos && dragState.roomSnapshot) {
       const dx = worldPos.x - dragState.startPos.x
       const dy = worldPos.y - dragState.startPos.y
       
-      let newX = dragState.roomStartBounds.x + dx
-      let newY = dragState.roomStartBounds.y + dy
+      let newX = dragState.roomSnapshot.bounds.x + dx
+      let newY = dragState.roomSnapshot.bounds.y + dy
       
       // Snap to grid if enabled
       if (state.snapToGrid) {
@@ -1393,18 +1603,47 @@ export function MapCanvas() {
         newY = Math.round(newY / gridSize) * gridSize
       }
       
+      const movedRoom = moveRoomWithContents(dragState.roomSnapshot, {
+        x: newX - dragState.roomSnapshot.bounds.x,
+        y: newY - dragState.roomSnapshot.bounds.y,
+      })
       dispatch(actions.updateRoom(dragState.roomId, {
-        bounds: {
-          ...dragState.roomStartBounds,
-          x: newX,
-          y: newY,
-        }
+        bounds: movedRoom.bounds,
+        doors: movedRoom.doors,
+        objects: movedRoom.objects,
       }))
+
+      if (!dragState.detachAttachments) {
+        const previewRooms = rooms.map(room =>
+          room.id === movedRoom.id ? movedRoom : room
+        )
+        for (const snapshot of dragState.attachedCorridorSnapshots) {
+          const result = reconcileAttachedCorridor({
+            corridor: snapshot,
+            rooms: previewRooms,
+            changedRoomIds: [movedRoom.id],
+            gridSize,
+          })
+          if (result.status === 'rerouted') {
+            dispatch(actions.updateCorridor(snapshot.id, {
+              segments: result.corridor.segments,
+              startAnchor: result.corridor.startAnchor,
+              endAnchor: result.corridor.endAnchor,
+            }))
+          }
+        }
+      }
       return
     }
     
     // Handle corridor dragging
-    if (corridorDragState.isDragging && corridorDragState.corridorId && corridorDragState.startPos && corridorDragState.originalSegments) {
+    if (
+      corridorDragState.isDragging &&
+      corridorDragState.corridorId &&
+      corridorDragState.startPos &&
+      corridorDragState.originalSegments &&
+      corridorDragState.corridorSnapshot
+    ) {
       const dx = worldPos.x - corridorDragState.startPos.x
       const dy = worldPos.y - corridorDragState.startPos.y
       
@@ -1429,68 +1668,131 @@ export function MapCanvas() {
         }
       })
       
-      dispatch(actions.updateCorridor(corridorDragState.corridorId, { segments: newSegments }))
+      const snapshot = corridorDragState.corridorSnapshot
+      let updated: Corridor = {
+        ...snapshot,
+        segments: newSegments,
+      }
+
+      if (corridorDragState.preserveAttachments) {
+        const startIsBound =
+          Boolean(snapshot.startAttachment) ||
+          Boolean(snapshot.startAnchor && snapshot.startAnchor.kind !== 'free')
+        const endIsBound =
+          Boolean(snapshot.endAttachment) ||
+          Boolean(snapshot.endAnchor && snapshot.endAnchor.kind !== 'free')
+
+        if (startIsBound) {
+          updated = updateCorridorPoint({
+            corridor: updated,
+            segmentIndex: 0,
+            pointType: 'start',
+            position: snapshot.segments[0].start,
+          })
+        } else if (updated.startAnchor?.kind === 'free' && updated.segments[0]) {
+          updated = {
+            ...updated,
+            startAnchor: {
+              kind: 'free',
+              position: { ...updated.segments[0].start },
+            },
+          }
+        }
+        if (endIsBound) {
+          updated = updateCorridorPoint({
+            corridor: updated,
+            segmentIndex: updated.segments.length - 1,
+            pointType: 'end',
+            position: snapshot.segments[snapshot.segments.length - 1].end,
+          })
+        } else if (updated.endAnchor?.kind === 'free' && updated.segments.length > 0) {
+          updated = {
+            ...updated,
+            endAnchor: {
+              kind: 'free',
+              position: {
+                ...updated.segments[updated.segments.length - 1].end,
+              },
+            },
+          }
+        }
+      } else {
+        updated = {
+          ...updated,
+          startAttachment: undefined,
+          endAttachment: undefined,
+          startAnchor: updated.segments[0]
+            ? { kind: 'free', position: { ...updated.segments[0].start } }
+            : undefined,
+          endAnchor: updated.segments.length > 0
+            ? {
+                kind: 'free',
+                position: {
+                  ...updated.segments[updated.segments.length - 1].end,
+                },
+              }
+            : undefined,
+        }
+      }
+
+      dispatch(actions.updateCorridor(updated.id, {
+        segments: updated.segments,
+        segmentIds: updated.segmentIds,
+        startAttachment: updated.startAttachment,
+        endAttachment: updated.endAttachment,
+        startAnchor: updated.startAnchor,
+        endAnchor: updated.endAnchor,
+      }))
       return
     }
     
     // Handle corridor point editing (resize)
-    if (corridorPointEdit.isEditing && corridorPointEdit.corridorId !== null && corridorPointEdit.segmentIndex !== null) {
-      const corridor = corridors.find(c => c.id === corridorPointEdit.corridorId)
-      if (corridor) {
-        const segmentIndex = corridorPointEdit.segmentIndex
-        const newSegments = corridor.segments.map((seg, idx) => {
-          if (idx !== segmentIndex) return seg
-          
-          let newPos = worldPos
-          // Snap to grid if enabled
-          if (state.snapToGrid) {
-            newPos = {
-              x: Math.round(worldPos.x / gridSize) * gridSize,
-              y: Math.round(worldPos.y / gridSize) * gridSize,
-            }
-          }
-          
-          if (corridorPointEdit.pointType === 'start') {
-            return { ...seg, start: newPos }
-          } else {
-            return { ...seg, end: newPos }
-          }
-        })
-        
-        // Also update connected segments if they share a point
-        const editedSeg = corridor.segments[segmentIndex]
-        if (editedSeg) {
-          const editedPoint = corridorPointEdit.pointType === 'start' ? editedSeg.start : editedSeg.end
-          
-          newSegments.forEach((seg, idx) => {
-            if (idx === segmentIndex) return
-            const origSeg = corridor.segments[idx]
-            
-            // Check if this segment shares the point being edited
-            if (origSeg.start.x === editedPoint.x && origSeg.start.y === editedPoint.y) {
-              let newPos = worldPos
-              if (state.snapToGrid) {
-                newPos = {
-                  x: Math.round(worldPos.x / gridSize) * gridSize,
-                  y: Math.round(worldPos.y / gridSize) * gridSize,
-                }
-              }
-              newSegments[idx] = { ...newSegments[idx], start: newPos }
-            } else if (origSeg.end.x === editedPoint.x && origSeg.end.y === editedPoint.y) {
-              let newPos = worldPos
-              if (state.snapToGrid) {
-                newPos = {
-                  x: Math.round(worldPos.x / gridSize) * gridSize,
-                  y: Math.round(worldPos.y / gridSize) * gridSize,
-                }
-              }
-              newSegments[idx] = { ...newSegments[idx], end: newPos }
-            }
-          })
+    if (
+      corridorPointEdit.isEditing &&
+      corridorPointEdit.corridorId !== null &&
+      corridorPointEdit.segmentIndex !== null &&
+      corridorPointEdit.pointType !== null &&
+      corridorPointEdit.corridorSnapshot
+    ) {
+      const candidate =
+        corridorPointEdit.endpoint && corridorPointEdit.preserveAttachments
+          ? findEndpointSnapCandidate({
+              point: worldPos,
+              rooms,
+              junctions,
+              corridors,
+              excludeCorridorId: corridorPointEdit.corridorId,
+              threshold: Math.max(18, gridSize * 0.75),
+            })
+          : null
+      let targetPosition = candidate?.position ?? worldPos
+      if (!candidate && state.snapToGrid) {
+        targetPosition = {
+          x: Math.round(worldPos.x / gridSize) * gridSize,
+          y: Math.round(worldPos.y / gridSize) * gridSize,
         }
-        
-        dispatch(actions.updateCorridor(corridor.id, { segments: newSegments }))
       }
+
+      const updated = updateCorridorPoint({
+        corridor: corridorPointEdit.corridorSnapshot,
+        segmentIndex: corridorPointEdit.segmentIndex,
+        pointType: corridorPointEdit.pointType,
+        position: targetPosition,
+        endpointBinding: corridorPointEdit.endpoint ? candidate : undefined,
+      })
+
+      dispatch(actions.updateCorridor(updated.id, {
+        segments: updated.segments,
+        segmentIds: updated.segmentIds,
+        startAttachment: updated.startAttachment,
+        endAttachment: updated.endAttachment,
+        startAnchor: updated.startAnchor,
+        endAnchor: updated.endAnchor,
+      }))
+      setCorridorPointEdit(previous => ({
+        ...previous,
+        snapCandidate: candidate,
+      }))
       return
     }
     
@@ -1577,26 +1879,91 @@ export function MapCanvas() {
     }
 
     // Handle panning with right mouse button (2) or middle button (4) or Pan tool or Space+LeftClick
-    if (e.buttons === 2 || e.buttons === 4 || (e.buttons === 1 && activeTool === EditorTool.Pan) || (e.buttons === 1 && isSpacePressed)) {
+    if (isRightMouseDown || e.buttons === 4 || (e.buttons === 1 && activeTool === EditorTool.Pan) || (e.buttons === 1 && isSpacePressed)) {
       dispatch(actions.setViewport({
         x: viewport.x + e.movementX,
         y: viewport.y + e.movementY,
         zoom: viewport.zoom,
       }))
     }
-  }, [isDrawing, activeTool, viewport, screenToWorld, dispatch, dragState, resizeState, corridorDragState, corridorPointEdit, corridors, rooms, state.snapToGrid, gridSize, corridorDrawState.isDrawing, isSpacePressed, marqueeState.isActive])
+  }, [isDrawing, activeTool, viewport, screenToWorld, dispatch, dragState, resizeState, corridorDragState, corridorPointEdit, corridors, rooms, junctions, state.snapToGrid, gridSize, corridorDrawState.isDrawing, isSpacePressed, marqueeState.isActive])
 
   const handleMouseUp = useCallback(() => {
+    if (gestureCancelledRef.current) {
+      gestureCancelledRef.current = false
+      return
+    }
+
     // End drag operation
     if (dragState.isDragging) {
-      setDragState({ isDragging: false, roomId: null, startPos: null, roomStartBounds: null })
-      dispatch(actions.pushHistory())
+      const movedRoomId = dragState.roomId
+      let blocked = false
+      if (movedRoomId) {
+        if (dragState.detachAttachments) {
+          for (const snapshot of dragState.attachedCorridorSnapshots) {
+            const detached = detachCorridorFromRoom(snapshot, movedRoomId)
+            if (detached === snapshot) continue
+            dispatch(actions.updateCorridor(snapshot.id, {
+              startAttachment: detached.startAttachment,
+              endAttachment: detached.endAttachment,
+              startAnchor: detached.startAnchor,
+              endAnchor: detached.endAnchor,
+            }))
+          }
+        } else {
+          const results = dragState.attachedCorridorSnapshots.map(snapshot => ({
+            snapshot,
+            result: reconcileAttachedCorridor({
+              corridor: snapshot,
+              rooms,
+              changedRoomIds: [movedRoomId],
+              gridSize,
+            }),
+          }))
+          blocked = results.some(({ result }) => result.status === 'blocked')
+
+          if (blocked && dragState.roomSnapshot) {
+            dispatch(actions.updateRoom(movedRoomId, dragState.roomSnapshot))
+            for (const snapshot of dragState.attachedCorridorSnapshots) {
+              dispatch(actions.updateCorridor(snapshot.id, snapshot))
+            }
+            console.warn('Room move cancelled: an attached corridor could not be rerouted')
+          } else {
+            for (const { snapshot, result } of results) {
+              if (result.status !== 'rerouted') continue
+              dispatch(actions.updateCorridor(snapshot.id, {
+                segments: result.corridor.segments,
+                startAnchor: result.corridor.startAnchor,
+                endAnchor: result.corridor.endAnchor,
+              }))
+            }
+          }
+        }
+      }
+      setDragState({
+        isDragging: false,
+        roomId: null,
+        startPos: null,
+        roomSnapshot: null,
+        attachedCorridorSnapshots: [],
+        detachAttachments: false,
+      })
+      if (!blocked) {
+        dispatch(actions.pushHistory())
+      }
       return
     }
     
     // End corridor drag operation
     if (corridorDragState.isDragging) {
-      setCorridorDragState({ isDragging: false, corridorId: null, startPos: null, originalSegments: null })
+      setCorridorDragState({
+        isDragging: false,
+        corridorId: null,
+        startPos: null,
+        originalSegments: null,
+        corridorSnapshot: null,
+        preserveAttachments: true,
+      })
       dispatch(actions.pushHistory())
       return
     }
@@ -1608,7 +1975,11 @@ export function MapCanvas() {
         corridorId: null, 
         segmentIndex: 0, 
         pointType: 'start', 
-        startPos: null 
+        startPos: null,
+        corridorSnapshot: null,
+        endpoint: null,
+        preserveAttachments: true,
+        snapCandidate: null,
       })
       dispatch(actions.pushHistory())
       return
@@ -1702,6 +2073,13 @@ export function MapCanvas() {
     }
   }, [activeTool, isDrawing, activeRoomType, gridSize, drawStartPoint, drawCurrentPoint, dispatch, dragState, resizeState, corridorDragState, corridorPointEdit, marqueeState, rooms, corridors])
 
+  useEffect(() => {
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [handleMouseUp])
+
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault()
     
@@ -1773,7 +2151,7 @@ export function MapCanvas() {
       // No intersections or allowed - create the corridor
       dispatch(actions.addCorridor({
         style: CorridorStyle.Standard,
-        segments: routeResult.segments,
+        segments: orthogonalizeSegments(routeResult.segments),
         width: corridorWidth,
         doors: [],
         connectedRoomIds: [],
@@ -1795,9 +2173,9 @@ export function MapCanvas() {
         if (collision.collides) {
           // Auto-route this segment around rooms
           const routeResult = autoRouteCorridor(start, end, rooms, corridors, gridSize, corridorWidth, true)
-          segments.push(...routeResult.segments)
+          segments.push(...orthogonalizeSegments(routeResult.segments))
         } else {
-          segments.push({ start, end })
+          segments.push(...orthogonalizeSegment(start, end))
         }
       }
       
@@ -1826,7 +2204,7 @@ export function MapCanvas() {
         // Create corridor with intersection (crossroad)
         dispatch(actions.addCorridor({
           style: CorridorStyle.Standard,
-          segments: intersectionDialog.pendingSegments,
+          segments: orthogonalizeSegments(intersectionDialog.pendingSegments),
           width: Math.floor(gridSize * 0.6),
           doors: [],
           connectedRoomIds: [],
@@ -1858,6 +2236,80 @@ export function MapCanvas() {
     }
     
     if (e.key === 'Escape') {
+      let cancelledGesture = false
+
+      if (dragState.isDragging && dragState.roomId && dragState.roomSnapshot) {
+        dispatch(actions.updateRoom(dragState.roomId, dragState.roomSnapshot))
+        for (const snapshot of dragState.attachedCorridorSnapshots) {
+          dispatch(actions.updateCorridor(snapshot.id, snapshot))
+        }
+        setDragState({
+          isDragging: false,
+          roomId: null,
+          startPos: null,
+          roomSnapshot: null,
+          attachedCorridorSnapshots: [],
+          detachAttachments: false,
+        })
+        cancelledGesture = true
+      }
+
+      if (corridorDragState.isDragging && corridorDragState.corridorSnapshot) {
+        dispatch(actions.updateCorridor(
+          corridorDragState.corridorSnapshot.id,
+          corridorDragState.corridorSnapshot
+        ))
+        setCorridorDragState({
+          isDragging: false,
+          corridorId: null,
+          startPos: null,
+          originalSegments: null,
+          corridorSnapshot: null,
+          preserveAttachments: true,
+        })
+        cancelledGesture = true
+      }
+
+      if (corridorPointEdit.isEditing && corridorPointEdit.corridorSnapshot) {
+        dispatch(actions.updateCorridor(
+          corridorPointEdit.corridorSnapshot.id,
+          corridorPointEdit.corridorSnapshot
+        ))
+        setCorridorPointEdit({
+          isEditing: false,
+          corridorId: null,
+          segmentIndex: null,
+          pointType: null,
+          startPos: null,
+          corridorSnapshot: null,
+          endpoint: null,
+          preserveAttachments: true,
+          snapCandidate: null,
+        })
+        cancelledGesture = true
+      }
+
+      if (resizeState.isResizing && resizeState.roomId && resizeState.roomStartBounds) {
+        dispatch(actions.updateRoom(resizeState.roomId, {
+          bounds: resizeState.roomStartBounds,
+        }))
+        setResizeState({
+          isResizing: false,
+          roomId: null,
+          handle: null,
+          startPos: null,
+          roomStartBounds: null,
+        })
+        cancelledGesture = true
+      }
+
+      if (cancelledGesture) {
+        gestureCancelledRef.current = true
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        return
+      }
+
       dispatch(actions.cancelDrawing())
       dispatch(actions.clearSelection())
       // Cancel corridor drawing
@@ -1911,11 +2363,18 @@ export function MapCanvas() {
     if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
       dispatch(actions.toggleSnapToGrid())
     }
-  }, [selection, dispatch, corridorDrawState, finishCorridorDrawing, corridors])
+  }, [selection, dispatch, corridorDrawState, finishCorridorDrawing, corridors, dragState, corridorDragState, corridorPointEdit, resizeState])
   
   // Handle context menu (right click)
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
+
+    const completedGesture = rightMousePanRef.current
+    rightMousePanRef.current = idleRightMousePan()
+    if (completedGesture.moved) {
+      setContextMenu(previous => previous.isOpen ? { ...previous, isOpen: false } : previous)
+      return
+    }
     
     const rect = containerRef.current?.getBoundingClientRect()
     if (!rect) return
@@ -1924,6 +2383,36 @@ export function MapCanvas() {
     const screenY = e.clientY - rect.top
     const worldPos = screenToWorld(screenX, screenY)
     
+    // Preserve the point-specific menu for a stationary right click.
+    const pointHitRadius = 14 / Math.max(viewport.zoom, 0.1)
+    for (const corridor of corridors) {
+      const renderableSegments = getRenderableCorridorSegments(corridor)
+      for (let segmentIndex = 0; segmentIndex < renderableSegments.length; segmentIndex++) {
+        const segment = renderableSegments[segmentIndex]
+        for (const pointType of ['start', 'end'] as const) {
+          const point = segment[pointType]
+          if (Math.hypot(worldPos.x - point.x, worldPos.y - point.y) > pointHitRadius) {
+            continue
+          }
+
+          if (!selection.ids.includes(corridor.id)) {
+            dispatch(actions.select({ type: 'corridor', ids: [corridor.id] }))
+          }
+          setContextMenu({
+            isOpen: true,
+            x: e.clientX,
+            y: e.clientY,
+            targetType: 'corridor-point',
+            targetId: corridor.id,
+            segmentIndex,
+            pointType,
+            worldPos: { ...point },
+          })
+          return
+        }
+      }
+    }
+
     // Check if clicked on a room
     for (const room of rooms) {
       const { x, y, width, height } = room.bounds
@@ -1972,7 +2461,7 @@ export function MapCanvas() {
       targetType: 'canvas',
       targetId: null,
     })
-  }, [rooms, corridors, selection, dispatch, screenToWorld])
+  }, [rooms, corridors, selection, dispatch, screenToWorld, viewport.zoom])
   
   // Close context menu
   const closeContextMenu = useCallback(() => {
@@ -2142,13 +2631,16 @@ export function MapCanvas() {
       }
     }
     
-    window.addEventListener('click', handleClickOutside)
-    window.addEventListener('keydown', (e) => {
+    const handleContextMenuEscape = (e: KeyboardEvent) => {
       if (e.key === 'Escape') closeContextMenu()
-    })
+    }
+
+    window.addEventListener('click', handleClickOutside)
+    window.addEventListener('keydown', handleContextMenuEscape)
     
     return () => {
       window.removeEventListener('click', handleClickOutside)
+      window.removeEventListener('keydown', handleContextMenuEscape)
     }
   }, [contextMenu.isOpen, closeContextMenu])
 
@@ -2159,7 +2651,6 @@ export function MapCanvas() {
         className="canvas-container w-full h-full"
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
         onDoubleClick={handleDoubleClick}
         onWheel={handleWheel}
         onContextMenu={handleContextMenu}

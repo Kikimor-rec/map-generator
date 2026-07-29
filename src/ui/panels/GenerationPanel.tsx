@@ -42,11 +42,11 @@ interface GenerationState {
 
 // CONSTANTS
 const SIZE_TIERS: Array<{ value: SizeTier; label: string; description: string }> = [
-  { value: 'xs', label: 'XS', description: '4-8 rooms' },
-  { value: 'sm', label: 'S', description: '8-16 rooms' },
-  { value: 'md', label: 'M', description: '16-32 rooms' },
-  { value: 'lg', label: 'L', description: '32-64 rooms' },
-  { value: 'xl', label: 'XL', description: '64-128 rooms' },
+  { value: 'xs', label: 'XS', description: 'Compact deck' },
+  { value: 'sm', label: 'S', description: 'Small deck' },
+  { value: 'md', label: 'M', description: 'Medium deck' },
+  { value: 'lg', label: 'L', description: 'Large deck' },
+  { value: 'xl', label: 'XL', description: 'Huge deck' },
 ]
 
 const STYLE_PROFILES: Array<{ value: StyleProfile; label: string }> = [
@@ -65,6 +65,34 @@ const QUALITY_MODES: Array<{ value: QualityMode; label: string; description: str
   { value: 'standard', label: 'Standard', description: '< 2s, playable, up to 20 candidates' },
   { value: 'polish', label: 'Polish', description: '< 10s, best quality' },
 ]
+
+function fitViewportForEditorData(editorData: any): { x: number; y: number; zoom: number } {
+  const points: Array<{ x: number; y: number }> = []
+  for (const room of editorData.rooms ?? []) {
+    points.push({ x: room.bounds.x, y: room.bounds.y })
+    points.push({ x: room.bounds.x + room.bounds.width, y: room.bounds.y + room.bounds.height })
+  }
+  for (const corridor of editorData.corridors ?? []) {
+    for (const segment of corridor.segments ?? []) {
+      points.push(segment.start, segment.end)
+    }
+  }
+  if (points.length === 0) return { x: 120, y: 80, zoom: 1 }
+
+  const minX = Math.min(...points.map(p => p.x))
+  const minY = Math.min(...points.map(p => p.y))
+  const maxX = Math.max(...points.map(p => p.x))
+  const maxY = Math.max(...points.map(p => p.y))
+  const width = Math.max(1, maxX - minX)
+  const height = Math.max(1, maxY - minY)
+  const zoom = Math.max(0.2, Math.min(1, 788 / width, 528 / height))
+
+  return {
+    x: Math.round((980 - width * zoom) / 2 - minX * zoom),
+    y: Math.round((720 - height * zoom) / 2 - minY * zoom),
+    zoom: Number(zoom.toFixed(2)),
+  }
+}
 
 export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   const { dispatch } = useEditor()
@@ -140,6 +168,13 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     seed: string
     roomCount: number
     corridorCount: number
+    diagnostics: {
+      connectedRoomPercent?: number
+      isolatedRooms?: number
+      junctionCount?: number
+      deadEndRatio?: number
+    }
+    viewport: { x: number; y: number; zoom: number }
   } | null>(null)
 
   // Available subtypes
@@ -173,6 +208,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   const handleApplyPreview = useCallback(() => {
     if (!previewData) return
     dispatch(actions.loadProject(previewData.project))
+    dispatch(actions.setViewport(previewData.viewport))
     addToSeedHistory(previewData.seed, previewData.roomCount)
     setPreviewData(null)
     onClose()
@@ -328,6 +364,8 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               level: 1,
               rooms: editorData.rooms,
               corridors: editorData.corridors,
+              junctions: editorData.junctions ?? [],
+              geometry: editorData.geometry,
             }
 
             const newProject = {
@@ -350,13 +388,20 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               seed: useSeed,
               roomCount: editorData.rooms.length,
               corridorCount: editorData.corridors.length,
+              diagnostics: {
+                connectedRoomPercent: metaData.ttrpgMetrics?.connectedRoomPercent,
+                isolatedRooms: metaData.ttrpgMetrics?.isolatedRooms,
+                junctionCount: metaData.ttrpgMetrics?.junctionCount,
+                deadEndRatio: metaData.ttrpgMetrics?.deadEndRatio,
+              },
+              viewport: fitViewportForEditorData(editorData),
             })
             addToSeedHistory(useSeed, editorData.rooms.length)
 
             setGenState({
               isGenerating: false,
               lastSeed: useSeed,
-              lastTiming: 0,
+              lastTiming: null,
               error: null,
               progress: 100,
               candidatesEvaluated: metaData.candidatesEvaluated || 0,
@@ -405,7 +450,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       setGenState(s => ({ ...s, isGenerating: false, error: error.message }));
     }
 
-  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, useQualityPipeline, qualityMode, generatorEngine, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, dispatch, onClose, generateRandomSeed])
+  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, useQualityPipeline, qualityMode, generatorEngine, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, dispatch, onClose, generateRandomSeed, addToSeedHistory])
 
   const handleCancel = useCallback(() => {
     if (workerRef.current) {
@@ -498,6 +543,8 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       level: 1,
       rooms: variant.data.rooms,
       corridors: variant.data.corridors,
+      junctions: variant.data.junctions ?? [],
+      geometry: variant.data.geometry,
     }
 
     const newProject = {
@@ -515,6 +562,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     }
 
     dispatch(actions.loadProject(newProject))
+    dispatch(actions.setViewport(fitViewportForEditorData(variant.data)))
     setGenState(s => ({ ...s, lastSeed: variant.seed }))
     onClose()
   }, [variants, archetype, dispatch, onClose])
@@ -786,7 +834,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               className="w-full py-2 px-3 text-sm text-left text-space-400 hover:text-space-200 border border-space-700 rounded hover:border-space-600 transition-colors flex justify-between items-center"
             >
               <span>{showLevel2 ? 'Less options' : 'More options (style, danger, gallery...)'}</span>
-              <span className="text-xs">{showLevel2 ? '▲' : '▼'}</span>
+              <span className="text-xs">{showLevel2 ? '^' : 'v'}</span>
             </button>
 
             {/* Tier 3: Advanced corridor settings */}
@@ -796,12 +844,17 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 className="w-full py-2 px-3 text-sm text-left text-space-400 hover:text-space-200 border border-space-700 rounded hover:border-space-600 transition-colors flex justify-between items-center"
               >
                 <span>Advanced corridor settings</span>
-                <span className="text-xs">{showAdvanced ? '▲' : '▼'}</span>
+                <span className="text-xs">{showAdvanced ? '^' : 'v'}</span>
               </button>
             )}
 
             {/* Advanced Routing Options (Tier 3) */}
-            {showLevel2 && showAdvanced && (
+            {showLevel2 && showAdvanced && generatorEngine === 'grid' && !useQualityPipeline && (
+              <div className="p-3 bg-space-800/50 rounded border border-space-700 text-xs text-space-400">
+                Grid engine now uses corridor graph defaults. Legacy routing sliders are hidden because they do not affect this engine.
+              </div>
+            )}
+            {showLevel2 && showAdvanced && (generatorEngine === 'legacy' || useQualityPipeline) && (
               <div className="space-y-3 p-3 bg-space-800/50 rounded border border-space-700">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -985,7 +1038,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
             {genState.lastSeed && !genState.error && !genState.isGenerating && !galleryMode && (
               <div className="p-3 bg-green-900/30 border border-green-700 rounded text-green-400 text-sm">
                 Done! Seed: <span className="font-mono">{genState.lastSeed}</span>
-                {genState.lastTiming && (
+                {genState.lastTiming !== null && genState.lastTiming > 0 && (
                   <span className="text-green-500 ml-2">({genState.lastTiming.toFixed(0)}ms)</span>
                 )}
               </div>
@@ -1048,6 +1101,12 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                 </div>
                 <div className="text-xs text-space-300">
                   {previewData.roomCount} rooms, {previewData.corridorCount} corridors
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-[11px] text-space-400">
+                  <span>Connected: {previewData.diagnostics.connectedRoomPercent ?? '?'}%</span>
+                  <span>Isolated: {previewData.diagnostics.isolatedRooms ?? '?'}</span>
+                  <span>Junctions: {previewData.diagnostics.junctionCount ?? '?'}</span>
+                  <span>Dead ends: {previewData.diagnostics.deadEndRatio ?? '?'}</span>
                 </div>
                 <div className="flex gap-2">
                   <button

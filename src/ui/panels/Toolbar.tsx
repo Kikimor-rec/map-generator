@@ -41,7 +41,7 @@ const SnapIcon = ({ size = 20, color = 'currentColor' }: { size?: number; color?
 
 export function Toolbar() {
   const { state, dispatch } = useEditor()
-  const { activeTool, showGrid, snapToGrid } = state
+  const { activeTool, showGrid, snapToGrid, preserveAttachments } = state
 
   return (
     <div className="flex flex-col gap-2 p-2 bg-space-900 border-r border-space-700">
@@ -77,6 +77,8 @@ export function Toolbar() {
                 {tool.id === EditorTool.Select && (
                   <div className="text-xs text-space-400 mt-1 border-t border-space-600 pt-1">
                     <div>• Двойной клик по коридору - добавить изгиб</div>
+                    <div>• Ctrl/Cmd+клик - выбрать сегмент</div>
+                    <div>• Alt+drag - инвертировать привязки</div>
                     <div>• ПКМ на точке - меню прикрепления</div>
                   </div>
                 )}
@@ -103,6 +105,16 @@ export function Toolbar() {
         title="Snap to Grid (S)"
       >
         <SnapIcon size={20} />
+      </button>
+
+      <button
+        className={`tool-button text-[10px] font-semibold leading-none ${preserveAttachments ? 'active' : ''}`}
+        onClick={() => dispatch(actions.togglePreserveAttachments())}
+        title={`Preserve attachments: ${preserveAttachments ? 'on' : 'off'}. Alt temporarily inverts this mode.`}
+        aria-pressed={preserveAttachments}
+        aria-label="Preserve attachments"
+      >
+        {preserveAttachments ? 'LINK' : 'FREE'}
       </button>
       
       {/* Active tool indicator */}

@@ -1,5 +1,5 @@
 import { useEditor, actions } from '@store/EditorContext'
-import { RoomType, ROOM_TYPE_CONFIGS, EditorTool, LayerType } from '@core/types'
+import { RoomType, ROOM_TYPE_CONFIGS, EditorTool } from '@core/types'
 import { EyeIcon, EyeOffIcon } from '@ui/components/Icons'
 
 export function RightPanel() {
@@ -9,7 +9,7 @@ export function RightPanel() {
   const allRoomTypes = Object.values(ROOM_TYPE_CONFIGS)
 
   // Get selected room
-  const selectedRoom = selection.type === 'room' && selection.ids.length > 0
+  const selectedRoom = selection.type === 'room' && selection.ids.length === 1
     ? rooms.find(r => r.id === selection.ids[0])
     : null
 
@@ -41,6 +41,26 @@ export function RightPanel() {
                 />
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {selection.ids.length > 1 && (
+        <div className="panel m-2">
+          <div className="panel-header">Selection</div>
+          <div className="p-3 space-y-3 text-sm">
+            <div className="text-space-200">
+              {selection.ids.length} {selection.type === 'room' ? 'rooms' : 'corridors'} selected
+            </div>
+            <p className="text-xs leading-relaxed text-space-400">
+              Drag or use the arrow keys to move the selection. Delete removes all selected items.
+            </p>
+            <button
+              onClick={() => dispatch(actions.clearSelection())}
+              className="btn btn-secondary w-full text-xs"
+            >
+              Clear Selection
+            </button>
           </div>
         </div>
       )}

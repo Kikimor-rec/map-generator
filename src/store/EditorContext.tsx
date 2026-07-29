@@ -62,6 +62,7 @@ interface EditorState {
   showGrid: boolean
   snapToGrid: boolean
   gridSize: number
+  preserveAttachments: boolean
 
   // History
   history: HistoryEntry[]
@@ -93,6 +94,7 @@ const initialState: EditorState = {
   showGrid: true,
   snapToGrid: true,
   gridSize: 32,
+  preserveAttachments: true,
   history: [],
   historyIndex: -1,
   snapshots: [],
@@ -133,6 +135,7 @@ type EditorAction =
   | { type: 'RESET_VIEWPORT' }
   | { type: 'TOGGLE_GRID' }
   | { type: 'TOGGLE_SNAP_TO_GRID' }
+  | { type: 'TOGGLE_PRESERVE_ATTACHMENTS' }
   | { type: 'SET_GRID_SIZE'; size: number }
   | { type: 'SET_THEME'; themeId: MapThemeId }
   | { type: 'TOGGLE_LAYER'; layerId: LayerType }
@@ -536,6 +539,10 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
       return { ...state, snapToGrid: !state.snapToGrid }
     }
 
+    case 'TOGGLE_PRESERVE_ATTACHMENTS': {
+      return { ...state, preserveAttachments: !state.preserveAttachments }
+    }
+
     case 'SET_GRID_SIZE': {
       return { ...state, gridSize: action.size }
     }
@@ -690,17 +697,25 @@ const EditorContext = createContext<EditorContextValue | null>(null)
 
 const AUTOSAVE_KEY = 'scifi-map-autosave'
 const AUTOSAVE_DELAY = 2000 // 2 seconds debounce
+const EDITOR_PREFERENCES_KEY = 'scifi-map-editor-preferences'
 
 export function EditorProvider({ children }: { children: ReactNode }) {
   // Load initial state from localStorage if available
   const loadedState = React.useMemo(() => {
     try {
       const saved = localStorage.getItem(AUTOSAVE_KEY)
+      const savedPreferences = localStorage.getItem(EDITOR_PREFERENCES_KEY)
+      const parsedPreferences = savedPreferences ? JSON.parse(savedPreferences) : null
+      const preserveAttachments =
+        typeof parsedPreferences?.preserveAttachments === 'boolean'
+          ? parsedPreferences.preserveAttachments
+          : initialState.preserveAttachments
       if (saved) {
         const parsed = JSON.parse(saved)
         if (parsed.project) {
           return {
             ...initialState,
+            preserveAttachments,
             project: parsed.project,
             activeDeckId: parsed.activeDeckId || parsed.project.decks[0]?.id || null,
             isDirty: false, // Not dirty on load
@@ -710,7 +725,10 @@ export function EditorProvider({ children }: { children: ReactNode }) {
     } catch (e) {
       console.warn('Failed to load autosave:', e)
     }
-    return initialState
+    return {
+      ...initialState,
+      preserveAttachments: loadPreserveAttachmentsPreference(),
+    }
   }, [])
 
   const [state, dispatch] = useReducer(editorReducer, loadedState)
@@ -735,6 +753,16 @@ export function EditorProvider({ children }: { children: ReactNode }) {
 
     return () => clearTimeout(timeoutId)
   }, [state.project, state.activeDeckId])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(EDITOR_PREFERENCES_KEY, JSON.stringify({
+        preserveAttachments: state.preserveAttachments,
+      }))
+    } catch (e) {
+      console.warn('Failed to save editor preferences:', e)
+    }
+  }, [state.preserveAttachments])
 
   // Computed values
   const activeDeck = state.project?.decks.find(d => d.id === state.activeDeckId) ?? null
@@ -811,6 +839,7 @@ export const actions = {
   resetViewport: (): EditorAction => ({ type: 'RESET_VIEWPORT' }),
   toggleGrid: (): EditorAction => ({ type: 'TOGGLE_GRID' }),
   toggleSnapToGrid: (): EditorAction => ({ type: 'TOGGLE_SNAP_TO_GRID' }),
+  togglePreserveAttachments: (): EditorAction => ({ type: 'TOGGLE_PRESERVE_ATTACHMENTS' }),
   setGridSize: (size: number): EditorAction => ({ type: 'SET_GRID_SIZE', size }),
   setTheme: (themeId: MapThemeId): EditorAction => ({ type: 'SET_THEME', themeId }),
   toggleLayer: (layerId: LayerType): EditorAction => ({ type: 'TOGGLE_LAYER', layerId }),
@@ -821,4 +850,17 @@ export const actions = {
   createSnapshot: (name: string, thumbnail?: string): EditorAction => ({ type: 'CREATE_SNAPSHOT', name, thumbnail }),
   restoreSnapshot: (snapshotId: string): EditorAction => ({ type: 'RESTORE_SNAPSHOT', snapshotId }),
   deleteSnapshot: (snapshotId: string): EditorAction => ({ type: 'DELETE_SNAPSHOT', snapshotId }),
+}
+
+function loadPreserveAttachmentsPreference(): boolean {
+  try {
+    const savedPreferences = localStorage.getItem(EDITOR_PREFERENCES_KEY)
+    if (!savedPreferences) return initialState.preserveAttachments
+    const parsedPreferences = JSON.parse(savedPreferences)
+    return typeof parsedPreferences?.preserveAttachments === 'boolean'
+      ? parsedPreferences.preserveAttachments
+      : initialState.preserveAttachments
+  } catch {
+    return initialState.preserveAttachments
+  }
 }

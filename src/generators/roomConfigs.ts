@@ -965,6 +965,12 @@ export const ARCHETYPE_CONFIGS: Record<Archetype, ArchetypeConfig> = {
         label: 'Civilian Station',
         additionalCores: ['quarters'],
         bonusRooms: ['commonArea', 'bar', 'messhall']
+      },
+      {
+        id: 'habitat',
+        label: 'Habitat Ring',
+        additionalCores: ['quarters', 'medbay'],
+        bonusRooms: ['commonArea', 'messhall', 'head', 'market']
       }
     ]
   },

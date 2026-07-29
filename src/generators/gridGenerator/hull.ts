@@ -7,7 +7,11 @@ import type { SeededRNG } from '../types'
 import {
   TileType,
   type GridCanvas,
+  type HullCarveContext,
   type HullConfig,
+  type HullLayout,
+  type HullLink,
+  type HullModule,
   type HullShape,
   type Point,
 } from './types'
@@ -23,8 +27,9 @@ import { isInBounds, fillCircle, getCanvasCenter } from './canvas'
 export function carveHull(
   canvas: GridCanvas,
   config: HullConfig,
-  rng: SeededRNG
-): void {
+  rng: SeededRNG,
+  context: HullCarveContext = {}
+): HullLayout | undefined {
   switch (config.shape) {
     case 'elongated':
     case 'pointed':
@@ -46,8 +51,7 @@ export function carveHull(
       carveIrregularHull(canvas, config, rng)
       break
     case 'clustered':
-      carveClusteredHull(canvas, config, rng)
-      break
+      return carveClusteredHull(canvas, config, rng, context)
     default:
       carveShipHull(canvas, config, rng)
   }
@@ -403,14 +407,21 @@ function smoothArray(arr: number[], passes: number): number[] {
 function carveClusteredHull(
   canvas: GridCanvas,
   config: HullConfig,
-  rng: SeededRNG
-): void {
+  rng: SeededRNG,
+  context: HullCarveContext
+): HullLayout {
   const center = getCanvasCenter(canvas)
-  const modules: Array<{ x: number; y: number; radius: number }> = []
+  const modules: HullModule[] = []
+  const links: HullLink[] = []
 
   // Central module
   const centralRadius = Math.min(canvas.width, canvas.height) * 0.15
-  modules.push({ x: center.x, y: center.y, radius: centralRadius })
+  modules.push({
+    id: 'outpost-module-0',
+    center,
+    radius: centralRadius,
+    kind: 'hub',
+  })
   fillCircle(canvas, center.x, center.y, centralRadius, TileType.HULL)
 
   // Add satellite modules
@@ -426,16 +437,23 @@ function carveClusteredHull(
     const radius = rng.randomFloat(centralRadius * 0.4, centralRadius * 0.8)
 
     if (isInBounds(canvas, mx, my)) {
-      modules.push({ x: mx, y: my, radius })
+      const module: HullModule = {
+        id: `outpost-module-${modules.length}`,
+        center: { x: mx, y: my },
+        radius,
+        kind: 'satellite',
+      }
+      modules.push(module)
       fillCircle(canvas, mx, my, radius, TileType.HULL)
 
       // Connect to central module with corridor
-      const corridorWidth = 2
-      for (let t = 0; t <= 1; t += 0.02) {
-        const cx = Math.round(center.x + (mx - center.x) * t)
-        const cy = Math.round(center.y + (my - center.y) * t)
-        fillCircle(canvas, cx, cy, corridorWidth, TileType.HULL)
-      }
+      links.push({
+        id: `outpost-primary-0-${modules.length - 1}`,
+        fromModuleId: modules[0].id,
+        toModuleId: module.id,
+        centerline: carveClusterLink(canvas, center, module.center, 2),
+        kind: 'primary',
+      })
     }
   }
 
@@ -444,17 +462,58 @@ function carveClusteredHull(
     const m1 = modules[i]
     const nextIdx = (i % (modules.length - 1)) + 1
     const m2 = modules[nextIdx]
+    const linkProbability = context.loopiness === undefined
+      ? 0.4
+      : Math.max(0, Math.min(1, context.loopiness))
 
-    if (rng.chance(0.4)) {
+    if (rng.chance(linkProbability)) {
       // Connect these modules
-      const corridorWidth = 1
-      for (let t = 0; t <= 1; t += 0.02) {
-        const cx = Math.round(m1.x + (m2.x - m1.x) * t)
-        const cy = Math.round(m1.y + (m2.y - m1.y) * t)
-        fillCircle(canvas, cx, cy, corridorWidth, TileType.HULL)
-      }
+      links.push({
+        id: `outpost-loop-${i}-${nextIdx}`,
+        fromModuleId: m1.id,
+        toModuleId: m2.id,
+        centerline: carveClusterLink(canvas, m1.center, m2.center, 1),
+        kind: 'loop',
+      })
     }
   }
+
+  return {
+    kind: 'clustered-outpost',
+    modules,
+    links,
+  }
+}
+
+function carveClusterLink(
+  canvas: GridCanvas,
+  from: Point,
+  to: Point,
+  width: number
+): Point[] {
+  const centerline: Point[] = []
+  let previousKey = ''
+
+  for (let t = 0; t <= 1; t += 0.02) {
+    const point = {
+      x: Math.round(from.x + (to.x - from.x) * t),
+      y: Math.round(from.y + (to.y - from.y) * t),
+    }
+    const key = `${point.x},${point.y}`
+    if (key !== previousKey) {
+      centerline.push(point)
+      previousKey = key
+    }
+    fillCircle(canvas, point.x, point.y, width, TileType.HULL)
+  }
+
+  const last = centerline[centerline.length - 1]
+  if (!last || last.x !== to.x || last.y !== to.y) {
+    centerline.push({ ...to })
+    fillCircle(canvas, to.x, to.y, width, TileType.HULL)
+  }
+
+  return centerline
 }
 
 // ============================================================================

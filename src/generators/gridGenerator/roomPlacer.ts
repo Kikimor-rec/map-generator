@@ -430,6 +430,7 @@ function stampRoom(
     bounds: { x: pos.x, y: pos.y, width, height },
     zone: room.zone || 'default',
     doorPositions: [], // Filled later by corridor router
+    circulationRole: 'terminal',
     program: room,
   }
 }

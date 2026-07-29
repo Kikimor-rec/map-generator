@@ -65,6 +65,15 @@ Defaults (src/core/corridorTypes.ts):
 - Crossing policy UI controls not exposed yet.  
 - Corridor creation logic still produces noisy layouts in some seeds; keep tracking in dev plan.
 
+## Grid Generator Recovery Notes
+- The grid generator now keeps connector ids on corridor tiles and derives a `CorridorGraph` from the canvas.
+- Overlapping corridor tiles can represent multiple logical connections instead of overwriting the previous corridor id.
+- Exported connectors preserve real room endpoints. `SPINE` is not used as a placeholder endpoint in grid conversion.
+- Grid connectivity is validated by flood-fill across passable tiles and repaired after door placement.
+- The legacy advanced routing sliders in the generator panel are hidden for the grid engine unless the legacy/quality engines are active.
+- The grid engine now uses trunk-first routing by default. A* is reserved for repair/fallback, which prevents dense bundles of long room-to-room paths.
+- Generated MapJSON connectors are physical graph edges, not logical room-to-room paths, so the editor does not redraw shared trunks as stacked independent corridors.
+
 ## File Map
 - Router logic: `src/core/corridorRouter.ts`
 - Fallback grid: `src/core/corridorPathfinding.ts`

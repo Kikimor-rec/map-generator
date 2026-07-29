@@ -10,6 +10,16 @@ let clipboard: {
   items: Array<Room | Corridor>
 } = { type: null, items: [] }
 
+const TOOL_HINTS: Partial<Record<EditorTool, string>> = {
+  [EditorTool.Select]: 'Select: drag to move; Alt temporarily inverts attachment preservation',
+  [EditorTool.Room]: 'Room: drag on the canvas to create a room',
+  [EditorTool.Corridor]: 'Hallway: click points to draw, right-click or Escape to finish',
+  [EditorTool.Door]: 'Door: click a room edge',
+  [EditorTool.Text]: 'Label: click to place text',
+  [EditorTool.Icon]: 'Marker: click to place a marker',
+  [EditorTool.Pan]: 'Pan: drag the canvas',
+}
+
 export function EditorLayout() {
   const { state, dispatch } = useEditor()
 
@@ -109,6 +119,43 @@ export function EditorLayout() {
           }
           return
         }
+
+        // Ctrl+A - Select all (based on active tool or available items)
+        if (e.key === 'a') {
+          e.preventDefault()
+          if (!state.project || !state.activeDeckId) {
+            return
+          }
+
+          const activeDeck = state.project.decks.find(deck => deck.id === state.activeDeckId)
+          if (!activeDeck) {
+            return
+          }
+
+          const roomIds = activeDeck.rooms.map(room => room.id)
+          const corridorIds = activeDeck.corridors.map(corridor => corridor.id)
+
+          if (state.activeTool === EditorTool.Corridor) {
+            if (corridorIds.length > 0) {
+              dispatch(actions.select({ type: 'corridor', ids: corridorIds }))
+            }
+            return
+          }
+
+          if (state.activeTool === EditorTool.Room) {
+            if (roomIds.length > 0) {
+              dispatch(actions.select({ type: 'room', ids: roomIds }))
+            }
+            return
+          }
+
+          if (roomIds.length > 0) {
+            dispatch(actions.select({ type: 'room', ids: roomIds }))
+          } else if (corridorIds.length > 0) {
+            dispatch(actions.select({ type: 'corridor', ids: corridorIds }))
+          }
+          return
+        }
         
         if (e.key === 'z') {
           e.preventDefault()
@@ -137,7 +184,7 @@ export function EditorLayout() {
             for (const room of rooms) {
               dispatch(actions.addRoom({
                 type: room.type,
-                name: room.name + ' (копия)',
+                name: room.name + ' (copy)',
                 bounds: {
                   x: room.bounds.x + 40,
                   y: room.bounds.y + 40,
@@ -195,7 +242,7 @@ export function EditorLayout() {
                 newIds.push(newId)
                 dispatch(actions.addRoom({
                   type: room.type,
-                  name: room.name + ' (копия)',
+                  name: room.name + ' (copy)',
                   bounds: {
                     x: room.bounds.x + offset,
                     y: room.bounds.y + offset,
@@ -277,7 +324,7 @@ export function EditorLayout() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [dispatch, state.selection, state.project, state.activeDeckId])
+  }, [dispatch, state.selection, state.project, state.activeDeckId, state.activeTool])
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-space-900">
@@ -293,6 +340,18 @@ export function EditorLayout() {
         <div className="flex flex-col flex-1 overflow-hidden">
           {/* Deck tabs */}
           <DeckTabs />
+
+          <div className="px-3 py-1.5 border-b border-space-700 bg-space-850 text-xs text-space-400 flex items-center justify-between">
+            <span>{TOOL_HINTS[state.activeTool] ?? 'Ready'}</span>
+            <span className="flex items-center gap-2">
+              <span
+                className={`h-2 w-2 rounded-full ${state.preserveAttachments ? 'bg-cyber-400' : 'bg-space-500'}`}
+                aria-hidden="true"
+              />
+              Attachments: {state.preserveAttachments ? 'preserve' : 'free'}
+              <span className="text-space-500">Alt = invert</span>
+            </span>
+          </div>
 
           {/* Canvas */}
           <div className="flex-1 overflow-hidden relative">

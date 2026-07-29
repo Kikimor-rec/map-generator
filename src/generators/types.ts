@@ -3,6 +3,8 @@
  * Based on specification in docs/generator/
  */
 
+import type { MultiPolygon } from '../geometry/types'
+
 // ============================================================================
 // Input Parameters (02_input_parameters.md)
 // ============================================================================
@@ -102,6 +104,8 @@ export interface GenerationRequest {
 // ============================================================================
 // Room Program (03_room_program.md)
 // ============================================================================
+
+export type RoomCirculationRole = 'terminal' | 'through' | 'hub'
 
 export type SizeClass = 'tiny' | 'small' | 'medium' | 'large' | 'huge'
 
@@ -217,8 +221,39 @@ export interface LayoutRoom {
   ports: Port[]
   isExterior: boolean
   tags?: string[]
+  circulationRole?: RoomCirculationRole
   metadata?: RoomMetadata
 }
+
+/**
+ * Exact endpoint topology exported by a layout engine.
+ *
+ * Room anchors are only valid when a concrete room port is known. Generic
+ * graph nodes intentionally remain corridor points instead of being guessed
+ * from a nearby room label.
+ */
+export type LayoutConnectorEndpointAnchor =
+  | {
+      kind: 'roomPort'
+      roomId: string
+      portId: string
+      doorId?: string
+      position: Point
+    }
+  | {
+      kind: 'junction'
+      junctionId: string
+      position: Point
+    }
+  | {
+      kind: 'corridorPoint'
+      pointId: string
+      position: Point
+    }
+  | {
+      kind: 'free'
+      position: Point
+    }
 
 export interface LayoutConnector {
   id: string
@@ -228,6 +263,8 @@ export interface LayoutConnector {
   path: Point[]
   width: number
   widthClass?: 'narrow' | 'standard' | 'wide'
+  startAnchor?: LayoutConnectorEndpointAnchor
+  endAnchor?: LayoutConnectorEndpointAnchor
 }
 
 export interface Junction {
@@ -251,6 +288,12 @@ export interface DeckLayout {
 // Output Contract (11_output_json_contract.md)
 // ============================================================================
 
+export interface DeckGeometry {
+  readonly unitsPerCell: number
+  readonly facilityEnvelope: MultiPolygon
+  readonly structuralVoids: readonly MultiPolygon[]
+}
+
 export interface MapJSON {
   version: string
   meta: MapMeta
@@ -264,6 +307,7 @@ export interface MapJSON {
     rooms: LayoutRoom[]
     connectors: LayoutConnector[]
     junctions: Junction[]
+    geometry?: DeckGeometry
   }>
 }
 
@@ -297,6 +341,27 @@ export interface TTRPGMetrics {
   estimatedExplorationMinutes: number
   keyLocations: number
   hiddenAreas: number
+  playabilityStatus?: 'pass' | 'warning' | 'error'
+  connectedRoomPercent?: number
+  isolatedRooms?: number
+  loopCount?: number
+  deadEndRatio?: number
+  corridorDeadEndCount?: number
+  junctionCount?: number
+  maxJunctionDegree?: number
+  averageCorridorTurns?: number
+  criticalReachability?: number
+  reachableRoomPairPercent?: number
+  alternateRoutePairPercent?: number
+  circulationCycleRank?: number
+  averageRoomRouteDistance?: number | null
+  longestRoomRouteDistance?: number | null
+  criticalRoomPairPathDistance?: number | null
+  averageEntryToCriticalDistance?: number | null
+  zoneTransitionCount?: number
+  playabilityViolationCodes?: string[]
+  throughRoomCount?: number
+  circulationHubRoomCount?: number
 }
 
 export interface ValidationIssue {

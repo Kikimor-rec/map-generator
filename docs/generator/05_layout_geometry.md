@@ -69,16 +69,86 @@
 - junction может быть помечен как checkpoint (security) или bulkhead.
 
 ## 5.7 “Корпус” (контур)
-Опционально: генератор возвращает outline hull:
+Обязательно: генератор возвращает физический envelope объекта:
 - ship: капсула/цилиндр/клин в зависимости от subtype,
 - station: кольцо/хаб/ферма,
 - outpost: периметр или “подземный контур”.
 
-Это полезно для рендера, но может быть выключено.
+Envelope является геометрическим ограничением, а не декоративным слоем:
+комнаты и маршруты обязаны оставаться внутри разрешённой области, а броня,
+топливо, машины, вакуум, рельеф и другие structural voids остаются
+непроходимыми.
+
+Канонические координаты envelope задаются целыми fixed-point единицами:
+`1 grid cell = 1024 geometry units`. Они не зависят от `gridSize`, zoom, DPI
+или размеров Pixi canvas.
+
+### Текущее состояние foundation
+
+Occupancy-first генератор уже выполняет переходный bridge:
+
+1. строит рабочую tile mask;
+2. детерминированно трассирует границу всех non-VOID клеток;
+3. переводит её в `MultiPolygon` с holes и disconnected polygons;
+4. сохраняет результат в optional `deck.geometry.facilityEnvelope`;
+5. адаптер редактора переводит geometry units в пиксели и рисует envelope.
+
+Обратное направление vector→mask реализовано чистым rasterizer в
+`src/geometry/`: клетка классифицируется по центру, outer boundary включается,
+hole boundary исключается, а blocking structural void имеет приоритет.
+
+Mask→polygon extraction является compatibility bridge для текущего
+occupancy-first генератора. В целевой модели canonical vector остаётся
+источником истины, а occupancy masks — вычисляемым кэшем.
+
+Архетипный envelope в active V2 уже строится до zoning/rooms через
+`carveHull(canvas, getDefaultHullConfig(archetype, subtype), rng, context)`:
+
+- ship получает вытянутый корпус с меняющейся шириной носа/кормы;
+- station сохраняет hub/ring negative space;
+- outpost получает лопастной/модульный периметр вместо filled bounding box;
+- clustered outpost возвращает стабильные `modules[]`/`links[]`, чтобы
+  circulation использовала фактическую топологию корпуса, а не восстанавливала
+  её по связным компонентам tile mask.
+
+Acceptance-тесты проверяют containment всех сгенерированных клеток внутри
+исходной hull mask, различимость этих трёх силуэтов и детерминизм tile mask /
+экспортированного envelope.
+
+Active V2 также выбирает первичную circulation по архетипу:
+
+- ship: центральная продольная магистраль по наиболее длинному вертикальному
+  сечению корпуса; XS/SM получают одну поперечную ветвь, MD+ — две;
+- circular station: замкнутое ортогональное кольцо и 4/6/8 радиальных спиц в
+  зависимости от `loopiness`;
+- habitat station: замкнутое кольцо в доступной части аннулуса и четыре
+  кардинальные спицы, заканчивающиеся у границы центрального hole;
+- clustered outpost: первичные связи hub→satellite и дополнительные loop-связи,
+  вероятность которых задаётся `loopiness`.
+
+Station/outpost валидируют полный набор runs до первой мутации circulation.
+Ship строит runs из фактических продольных сечений и поперечных spans корпуса;
+его carving hull-contained, но пока не оформлен как отдельная атомарная
+prevalidation-фаза. Ни одна стратегия не режет VOID исходной hull mask. Room
+bays уже mask-aware и используют все runs, но пока остаются общей прямоугольной
+стратегией. Semantic `structuralVoids`, service loop корабля, module-aware
+zoning базы и polygon room editing ещё не реализованы.
+
+Требования к визуальному языку, данным и приёмке определены в
+`docs/specs/ARCHETYPE_MAP_VISUAL_SPEC.md`.
 
 ## 5.8 Выход геометрии
 Для каждого deck:
+- `geometry?` — legacy-compatible bridge:
+  - `unitsPerCell: 1024`
+  - `facilityEnvelope: MultiPolygon`
+  - `structuralVoids: MultiPolygon[]`
 - `rooms[].geometry` (rect/polygon)
 - `ports[]` с координатами
 - `connectors[].path` (polyline)
 - `junctions[]`
+
+Поле `geometry` остаётся optional, чтобы старые проекты продолжали
+импортироваться. Текущий генератор заполняет `facilityEnvelope`, но
+`structuralVoids` пока экспортирует как пустой массив; типы и render path уже
+готовы, семантическая генерация voids/keepouts — отдельный незавершённый этап.

@@ -16,6 +16,7 @@ import type {
 } from '../types'
 import { createRNG } from '../rng'
 import { generateRoomProgram } from '../roomProgram'
+import { generateGridMapV2 } from './occupancyGenerator'
 
 import {
   TileType,
@@ -68,6 +69,8 @@ export interface GridGeneratorResult {
  * Generate a map using the grid-first approach
  */
 export function generateGridMap(options: GridGeneratorOptions = {}): GridGeneratorResult {
+  return generateGridMapV2(options)
+
   const startTime = performance.now()
   const timing = {
     total: 0,
@@ -146,6 +149,8 @@ export function generateGridMap(options: GridGeneratorOptions = {}): GridGenerat
     // Stage 6: Place doors at room-corridor boundaries
     const doorsStart = performance.now()
     placeDoors(canvas, placements)
+    ensureConnectivity(canvas, placements, corridorTiles)
+    placeDoors(canvas, placements)
     timing.doors = performance.now() - doorsStart
 
     // Stage 7: Convert to MapJSON
@@ -167,11 +172,11 @@ export function generateGridMap(options: GridGeneratorOptions = {}): GridGenerat
       timing,
     }
 
-  } catch (error) {
+  } catch (error: any) {
     timing.total = performance.now() - startTime
     return {
       success: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: error instanceof Error ? error.message : String(error as unknown),
       timing,
     }
   }
@@ -199,3 +204,12 @@ export { placeRoomsGraphFirst } from './roomPlacer'
 export { routeCorridors, placeDoors } from './corridorRouter'
 export { convertToMapJSON, generateDebugOutput } from './convert'
 export { getAdjacencyWeight, mustBeExterior } from './adjacency'
+export { buildCorridorGraph } from './corridorGraph'
+export { analyzeConnectivity, calculateGridMetrics } from './metrics'
+export {
+  getPlayabilityThresholds,
+  validateTTRPGPlayability,
+  type PlayabilityReport,
+  type PlayabilityValidationOptions,
+  type PlayabilityViolation,
+} from './playabilityValidator'

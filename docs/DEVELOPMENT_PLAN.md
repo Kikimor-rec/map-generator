@@ -75,10 +75,10 @@
 | Инструмент Select | ✅ | Клик для выбора |
 | Подсветка выбранной комнаты | ✅ | Зелёная рамка + glow |
 | Подсветка при hover | ✅ | Голубая рамка |
-| Перемещение комнат (drag) | ✅ | Только что добавлено |
-| Изменение размеров (resize handles) | ✅ | 8 маркеров |
+| Перемещение комнат (drag) | ⚠️ | Базовый single-room drag; dependent doors/objects, containment и reroute см. `EDITOR_UX_BACKLOG.md` |
+| Изменение размеров (resize handles) | ⚠️ | 8 маркеров есть; dependent geometry и collision contract не реализованы |
 | Удаление комнат (Delete key) | ✅ | Работает |
-| Множественное выделение | ✅ | Shift+клик для переключения |
+| Множественное выделение | ⚠️ | Same-type selection есть; mixed/group drag и Shift-marquee неполны |
 
 ### 2.4 Коридоры
 | Задача | Статус | Примечания |
@@ -86,16 +86,29 @@
 | Рендеринг коридоров | ✅ | segments с start/end |
 | Инструмент Corridor (рисование) | ✅ | Клик для точек, двойной клик/Enter для завершения |
 | Preview при рисовании коридора | ✅ | Линии + точки |
-| Перемещение коридоров | ✅ | С выделением |
-| Редактирование коридоров | ✅ | Drag точек, добавление waypoints |
-| Автопривязка к комнатам | ✅ | Snap к стенам с attachment |
+| Перемещение коридоров | ⚠️ | Whole-path translate есть; attachments, locks и collision-aware commit неполны |
+| Редактирование коридоров | ⚠️ | Drag точек/double-click есть; perpendicular segment drag и locked waypoints не готовы |
+| Автопривязка к комнатам | ⚠️ | Manual wall attachment есть; generated grid corridors импортируются без editor attachments |
 | A* авто-роутинг | ✅ | corridorRouter.ts |
-| Плавные углы | ⚠️ | Типы определены, рендеринг не реализован |
-| T-образные пересечения | ⚠️ | Junction типы определены, рендеринг не реализован |
-| Система портов | ✅ | N/E/S/W, fixed/sliding |
+| Плавные углы | ⚠️ | Aggregate corridor skin в MapCanvas; true fillet/boolean outline ещё нужен |
+| T-образные пересечения | ⚠️ | Junction топология есть; normal view скрывает markers, selected/debug view показывает |
+| Система портов | ⚠️ | Типы N/E/S/W, fixed/sliding есть; canonical end-to-end anchors ещё не внедрены |
 | Waypoints (locked/auto) | ⚠️ | Типы есть, locked waypoints + reroute Phase 3 |
 | Line Jumps | ⚠️ | Типы arc/gap/sharp определены, рендеринг не реализован |
 | Straightness/wander параметр | ❌ | Контроль прямолинейности (связан с bendPenalty) |
+
+### 2.4.1 Post-generation editing contract
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Единый backlog и acceptance matrix | ✅ | `docs/EDITOR_UX_BACKLOG.md` |
+| Canonical endpoint anchors | ⚠️ | Generated exact anchors и manual endpoint snap готовы; stable corridor-point schema/migration остаются |
+| Preserve attachments default + Alt override + постоянный toggle | ⚠️ | Persistent toggle, room/endpoint Alt-инверсия и snap preview готовы; explicit actions и остальные drag machines впереди |
+| Dependent room/door/object move и resize | ⚠️ | Move world-position contents готов; local schema/resize впереди |
+| Dirty incremental reroute | ⚠️ | Attached room routes + room obstacles + whole-gesture noPath rollback готовы; hull/void/locked впереди |
+| Locked waypoints при reroute | ❌ | Auto geometry меняется, locked geometry сохраняется |
+| Atomic undo, Esc rollback и pointer capture | ⚠️ | Room/endpoint snapshots, Esc rollback и window mouseup готовы; pointercancel/no-op/единая command model впереди |
+| Orthogonal model invariant | ⚠️ | Generated/imported/endpoint-edit paths H/V; schema validator и segment-drag ещё нужны |
+| Facility envelope/hull/background composition epic | ⚠️ | Generated envelope есть; manual modular ship/station/base workflow отсутствует |
 
 ### 2.5 Внутренние стены и перегородки
 | Задача | Статус | Примечания |
@@ -117,10 +130,22 @@
 | Каталог типов комнат (40+) | ✅ | src/generators/roomConfigs.ts |
 | Room Program генератор | ✅ | Зоны, приоритеты |
 | Topology Graph генератор | ✅ | Backbone, clusters, loops |
-| Layout Geometry генератор | ✅ | Linear/hub/grid patterns |
-| Генерация коридоров | ✅ | L-образные сегменты |
+| Layout Geometry генератор | ⚠️ | Active V2 использует hull-aware `carveHull` и архетипную primary circulation; room bays пока общие rectangular mask-aware |
+| Генерация коридоров | ✅ | V2 carves corridor/door/floor tiles first, then extracts graph edges |
 | Параметры генерации | ✅ | archetype, subtype, sizeTier, loopiness, danger |
 | Пресеты кораблей | ✅ | GENERATION_PRESETS + ARCHETYPE_CONFIGS |
+
+### 3.1.1 Визуальная грамматика архетипов
+| Задача | Статус | Примечания |
+|--------|--------|------------|
+| Целевая спецификация ship/station/outpost | ✅ | `docs/specs/ARCHETYPE_MAP_VISUAL_SPEC.md` |
+| Обязательный facility envelope в схеме и экспорте | ⚠️ | Hull-aware mask→MultiPolygon export, Pixi render, containment/determinism/silhouette tests готовы; legacy bridge пока optional |
+| Structural voids / keepout zones | ⚠️ | Schema/render bridge есть; генератор пока экспортирует `[]`, семантика и размещение впереди |
+| Архетипные circulation strategies | ⚠️ | Ship central longitudinal + 1/2 transverse; circular station closed ring + 4/6/8 spokes; habitat ring + 4 cardinal spokes; clustered outpost primary/optional loop network |
+| Overview + playable deck | ❌ | Связанные представления с общими connector ids |
+| Функциональные props по room role | ❌ | Помещение узнаваемо без подписи |
+| Lazarus-подобный render profile | ❌ | Ограниченная палитра, line weights, grid, legend |
+| Visual-regression fixtures архетипов | ❌ | Различимость по силуэту без подписей |
 
 ### 3.2 UI генерации
 | Задача | Статус | Примечания |
@@ -136,9 +161,10 @@
 | Задача | Статус | Примечания |
 |--------|--------|------------|
 | Правила размещения типов | ✅ | roomConfigs с countRules |
-| Группировка по зонам | ✅ | command, engineering, crew, cargo, medical |
-| Валидация связности | ⚠️ | Базовая в topology.ts |
-| Предупреждения о нелогичности | ⚠️ | ValidationIssue в генераторе |
+| Группировка по зонам | ✅ | Ship bands, station radial zones, clustered-outpost nearest-module zones |
+| Функциональное archetype-aware placement | ⚠️ | Active occupancy scorer + outpost module metadata; rectangular bays, без global adjacency solve и props |
+| Валидация связности | ✅ | Active V2: physical-grid connectivity + critical entry reachability |
+| Предупреждения о нелогичности | ⚠️ | Structured read-only playability report готов; UI review/quick-fix ещё нет |
 
 ---
 
@@ -204,7 +230,8 @@
 | Инструмент Door | ✅ | Клик у стены комнаты |
 | Размещение дверей на стенах | ✅ | Автоопределение ближайшей стены |
 | Отрисовка дверей | ✅ | Цвет по типу |
-| Автоматические двери при генерации | ⚠️ | Базово в генераторе |
+| Автоматические двери при генерации | ✅ | Все room ports получают standard/secure/bulkhead/airlock semantic; MapJSON/editor bridge готов |
+| Pressurization graph и полный двухстворчатый шлюз | ❌ | Есть pressure intent metadata, но нет external second hatch/compartment solve |
 
 ### 6.2 Расширенная система коридоров
 | Задача | Статус | Примечания |
@@ -248,10 +275,10 @@
 | Junction split алгоритм | ❌ | corridorPostProcess.ts |
 | Junction merge/relax | ❌ | corridorPostProcess.ts |
 | Beautify pass (ортогонализация) | ❌ | corridorPostProcess.ts |
-| TTRPG метрики расчёт | ❌ | ttrpgMetrics.ts |
-| Валидация нелинейности | ❌ | ttrpgMetrics.ts |
-| Primary spine / Secondary connectors | ❌ | generator.ts |
-| Redundancy pass (петли) | ❌ | generator.ts |
+| TTRPG метрики расчёт | ✅ | `playabilityValidator.ts`; compact report экспортируется в `meta.ttrpgMetrics` |
+| Валидация нелинейности | ⚠️ | Cycle rank + edge-redundant critical pairs готовы; semantic service/vent paths впереди |
+| Primary spine / Secondary connectors | ⚠️ | Active V2: все runs hull-contained; station/outpost atomic prevalidation, ship пока нет; legacy `generator.ts` не переведён |
+| Redundancy pass (петли) | ⚠️ | Station/outpost используют `loopiness`; ship service loop ещё не реализован |
 | UI: Routing секция в GenerationPanel | ✅ | Advanced corridor settings с sliders |
 | Debug overlay рендеринг | ❌ | MapCanvas.tsx |
 
@@ -474,6 +501,7 @@
 |--------|--------|------------|
 | Колесо: zoom к курсору | ✅ | |
 | Средняя кнопка + drag: pan | ✅ | |
+| ПКМ + drag: pan без контекстного меню | ✅ | Меню открывается только при stationary right click |
 | Space + ЛКМ drag: pan | ✅ | |
 | Shift + колесо: горизонтальный скролл | ✅ | |
 | Zoom to fit | ⚠️ | Кнопка есть |
@@ -486,9 +514,9 @@
 |--------|--------|------------|
 | ЛКМ по объекту: выделить | ✅ | |
 | ЛКМ по пустому: снять выделение | ✅ | |
-| Shift + ЛКМ: toggle multi-select | ✅ | Для комнат и коридоров |
+| Shift + ЛКМ: toggle multi-select | ⚠️ | Same-type rooms/corridors; mixed selection впереди |
 | Marquee selection (рамкой) | ✅ | Drag на пустом месте |
-| Shift + marquee: добавить к выделению | ✅ | |
+| Shift + marquee: добавить к выделению | ❌ | Текущая реализация заменяет selection |
 | Alt + marquee: touch select | ❌ | |
 | Двойной клик: открыть inspector | ⚠️ | Для коридоров добавляет waypoint |
 
@@ -634,11 +662,13 @@
 ### 16.5 Метрики TTRPG
 | Задача | Статус | Примечания |
 |--------|--------|------------|
-| Main loop present | ❌ | |
+| Read-only structured playability report | ✅ | Deterministic metrics + violations/severity/hints |
+| Main loop present | ✅ | Physical circulation cycle rank |
 | Chokepoints count | ❌ | |
-| Dead ends count | ❌ | |
-| Alt routes между ключевыми зонами | ❌ | |
+| Dead ends count | ✅ | Count + ratio + archetype/size-aware soft threshold |
+| Alt routes между ключевыми зонами | ⚠️ | Edge-redundancy между critical/entry ingress; layer semantics впереди |
 | Encounter pockets count | ❌ | |
+| Auto-repair по TTRPG violations | ❌ | Validator сейчас read-only |
 
 ---
 
@@ -790,8 +820,8 @@
 | Задача | Статус | Примечания |
 |--------|--------|------------|
 | EndpointMarkerType | ✅ | none/door/grate/airlock/hatch/bulkhead/locked |
-| Snap коридора к грани комнаты | ⚠️ | WallAttachment |
-| Visual feedback при hover над гранью | ❌ | |
+| Snap endpoint к roomPort/грани/junction/corridorPoint | ⚠️ | Canonical/legacy binding + preview готовы; создание junction при drop на segment впереди |
+| Visual feedback для snap candidate | ⚠️ | Canvas ring + status готовы; target-specific glyph/label впереди |
 | Endpoint marker влияет на семантику | ❌ | isGate, blocksMovement |
 | None = бесшовное соединение | ❌ | Визуально сливает сегменты |
 
@@ -843,7 +873,7 @@
 | Задача | Статус | Примечания |
 |--------|--------|------------|
 | Ctrl+C / Ctrl+V copy/paste | ✅ | |
-| Ctrl+A select all | ❌ | |
+| Ctrl+A select all | ✅ | Активная палуба; учитывает текущий инструмент |
 | Reset View кнопка | ❌ | Центр/масштаб по умолчанию |
 
 ---
@@ -930,28 +960,29 @@
 6. ✅ Процедурная генерация (8-этапный пайплайн)
 7. ⚠️ Расширенная система коридоров (порты ok, waypoints/junctions частично)
 8. ✅ Marquee selection (выделение рамкой)
-9. 🔄 Print Preview + Multi-page PDF export
-10. 🔄 VTT Export (Universal VTT формат)
+9. 🔄 Post-generation editing + dependent reroute (`EDITOR_UX_BACKLOG.md`, P0)
+10. 🔄 Print Preview + Multi-page PDF export
+11. 🔄 VTT Export (Universal VTT формат)
 
 ### Средний приоритет:
-11. ✅ Перемещение/редактирование коридоров
-12. ✅ UI для смены цвета комнаты
-13. ✅ Множественное выделение
-14. ✅ Auto-save
-15. ✅ Контекстное меню
-16. ✅ Интеграция нового роутера в UI (sliders работают)
-17. ✅ Визуализация junction'ов и line jumps (render добавлен)
-18. ✅ Command Palette (Ctrl+K)
-19. ✅ Галерея вариантов генератора (gallery mode)
-20. ❌ Lock/Freeze при генерации
+12. ⚠️ Базовое перемещение/редактирование коридоров; canonical attachments и reroute — P0
+13. ✅ UI для смены цвета комнаты
+14. ⚠️ Same-type multi-select; mixed/group drag — P1
+15. ✅ Auto-save
+16. ⚠️ Контекстное меню есть; часть actions и undo contract неполны
+17. ✅ Интеграция нового роутера в UI (sliders работают)
+18. ✅ Визуализация junction'ов и line jumps (render добавлен)
+19. ✅ Command Palette (Ctrl+K)
+20. ✅ Галерея вариантов генератора (gallery mode)
+21. ❌ Lock/Freeze при генерации
 
 ### Низкий приоритет:
-21. ❌ Объекты и интерьер
-22. ❌ Слои (вентиляция, коммуникации)
-23. ❌ Аннотации и GM Notes
-24. ❌ Пресеты и геоморфы
-25. ❌ Режим графа
-26. ❌ Isometric View
+22. ❌ Объекты и интерьер
+23. ❌ Слои (вентиляция, коммуникации)
+24. ❌ Аннотации и GM Notes
+25. ❌ Пресеты и геоморфы
+26. ❌ Режим графа
+27. ❌ Isometric View
 
 ---
 

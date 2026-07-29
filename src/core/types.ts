@@ -3,6 +3,8 @@
  * Defines all data structures for rooms, corridors, objects, and map elements
  */
 
+import type { MultiPolygon } from '../geometry/types'
+
 // ============================================================================
 // Basic Geometry Types
 // ============================================================================
@@ -600,6 +602,36 @@ export interface CorridorAttachment {
   offset: number // 0-1 position along the wall
 }
 
+/**
+ * Canonical, topology-aware reference for a corridor endpoint.
+ *
+ * `startAttachment` / `endAttachment` remain available for legacy projects.
+ * Anchors are optional during the migration and must only be emitted when the
+ * referenced topology is known exactly (never inferred from a nearest room).
+ */
+export type CorridorEndpointAnchor =
+  | {
+      kind: 'roomPort'
+      roomId: string
+      portId: string
+      doorId?: string
+      position: Point
+    }
+  | {
+      kind: 'junction'
+      junctionId: string
+      position: Point
+    }
+  | {
+      kind: 'corridorPoint'
+      pointId: string
+      position: Point
+    }
+  | {
+      kind: 'free'
+      position: Point
+    }
+
 export interface Corridor {
   id: string
   style: CorridorStyle
@@ -613,6 +645,9 @@ export interface Corridor {
   // Optional attachments for start and end points
   startAttachment?: CorridorAttachment
   endAttachment?: CorridorAttachment
+  // Canonical endpoint anchors; optional while legacy attachments are supported
+  startAnchor?: CorridorEndpointAnchor
+  endAnchor?: CorridorEndpointAnchor
 }
 
 // ============================================================================
@@ -711,6 +746,18 @@ export interface CorridorLineJump {
   size: number
 }
 
+/**
+ * Transitional per-deck bridge for canonical fixed-point facility geometry.
+ *
+ * Coordinates are expressed in geometry units; `unitsPerCell` declares their
+ * relationship to the editor grid without coupling the document to pixels.
+ */
+export interface DeckGeometry {
+  unitsPerCell: number
+  facilityEnvelope: MultiPolygon
+  structuralVoids: readonly MultiPolygon[]
+}
+
 export interface Deck {
   id: string
   name: string
@@ -721,6 +768,8 @@ export interface Deck {
   junctions?: CorridorJunction[]
   /** Line jumps where corridors cross without connecting */
   lineJumps?: CorridorLineJump[]
+  /** Optional canonical facility envelope; absent on legacy projects. */
+  geometry?: DeckGeometry
 }
 
 export interface MapProject {

@@ -1,23 +1,22 @@
 /**
  * Corridor Router — Routes corridors BETWEEN placed rooms
  *
- * This replaces the old "spine-first" approach. Instead of carving corridors
- * first and placing rooms beside them, we:
+ * Active grid routing is now corridor-first. Instead of peer-to-peer routing
+ * every room pair through A*, we:
  *
- * 1. Build a connection graph from room adjacency preferences
- * 2. Route corridors between connected rooms using A*
- * 3. Detect corridor crossings and create proper junctions
- * 4. Merge parallel/overlapping corridors
- * 5. Add loop connections for tactical gameplay (based on loopiness param)
+ * 1. Choose low-obstruction trunk corridors.
+ * 2. Connect rooms to trunks with short orthogonal stubs.
+ * 3. Detect branch/crossing tiles and create proper junctions.
+ * 4. Keep A* as repair/fallback, not as the primary layout grammar.
  *
  * Key principles:
- * - No parallel corridors (merge them or create crossings)
- * - Every crossing becomes a junction (T or cross)
+ * - Avoid peer-to-peer spaghetti
+ * - Straight shared trunk tiles are not visual junction markers
  * - Corridors follow L-shaped or straight paths (orthogonal only)
  * - Rooms that need to be connected WILL be connected
  */
 
-import type { SeededRNG, ProgrammedRoom, ConnectorHint } from '../types'
+import type { SeededRNG } from '../types'
 import {
   TileType,
   type GridCanvas,
@@ -31,6 +30,8 @@ import {
   DIRECTIONS_4,
 } from './canvas'
 import { getAdjacencyWeight } from './adjacency'
+import { addConnectorIdToTile, connectorIdForRooms } from './corridorGraph'
+import { analyzeConnectivity } from './metrics'
 
 // ============================================================================
 // TYPES
@@ -59,6 +60,243 @@ export function routeCorridors(
 ): Point[] {
   if (placements.length < 2) return []
 
+  return routeSpineCorridors(canvas, placements, loopiness, rng)
+}
+
+function routeSpineCorridors(
+  canvas: GridCanvas,
+  placements: RoomPlacement[],
+  loopiness: number,
+  rng: SeededRNG
+): Point[] {
+  const allCorridorTiles = new Set<string>()
+  const spine = buildCorridorSpine(canvas, placements, loopiness, rng)
+
+  for (const path of spine.paths) {
+    carveCorridorPath(canvas, path, connectorIdForRooms('network', 'network'), allCorridorTiles)
+  }
+
+  const sortedRooms = [...placements].sort((a, b) => {
+    const ac = roomCenter(a)
+    const bc = roomCenter(b)
+    return canvas.archetype === 'ship' ? ac.y - bc.y : ac.x - bc.x
+  })
+
+  for (const room of sortedRooms) {
+    const connection = routeRoomToSpine(canvas, room, spine.points)
+    const fallback = connection ?? routeRoomToAnyCorridor(canvas, room)
+    if (!fallback || fallback.length < 2) continue
+
+    carveCorridorPath(canvas, fallback, connectorIdForRooms(room.roomId, 'network'), allCorridorTiles)
+    updateDoorPositions(canvas, room)
+  }
+
+  if (loopiness > 0.55) {
+    carveServiceBypass(canvas, placements, spine, allCorridorTiles)
+  }
+
+  return createJunctions(canvas)
+}
+
+function buildCorridorSpine(
+  canvas: GridCanvas,
+  placements: RoomPlacement[],
+  loopiness: number,
+  rng: SeededRNG
+): { points: Point[]; paths: Point[][]; primaryX: number; primaryY: number } {
+  const centers = placements.map(roomCenter)
+  const minY = Math.max(1, Math.min(...centers.map(p => p.y)) - 2)
+  const maxY = Math.min(canvas.height - 2, Math.max(...centers.map(p => p.y)) + 2)
+  const minX = Math.max(1, Math.min(...centers.map(p => p.x)) - 2)
+  const maxX = Math.min(canvas.width - 2, Math.max(...centers.map(p => p.x)) + 2)
+  const centerX = Math.round(centers.reduce((sum, p) => sum + p.x, 0) / centers.length)
+  const centerY = Math.round(centers.reduce((sum, p) => sum + p.y, 0) / centers.length)
+
+  const primaryX = chooseLeastObstructedColumn(canvas, centerX, minY, maxY)
+  const primaryY = chooseLeastObstructedRow(canvas, centerY, minX, maxX)
+  const paths: Point[][] = []
+  const points: Point[] = []
+
+  const vertical = getOrthogonalPath({ x: primaryX, y: minY }, { x: primaryX, y: maxY })
+  paths.push(vertical)
+  points.push(...vertical)
+
+  if (canvas.archetype !== 'ship' || loopiness > 0.35) {
+    const horizontal = getOrthogonalPath({ x: minX, y: primaryY }, { x: maxX, y: primaryY })
+    paths.push(horizontal)
+    points.push(...horizontal)
+  }
+
+  if (canvas.archetype === 'ship' && loopiness > 0.75 && rng.chance(0.65)) {
+    const offset = rng.chance(0.5) ? -4 : 4
+    const secondaryX = chooseLeastObstructedColumn(canvas, primaryX + offset, minY, maxY)
+    const secondary = getOrthogonalPath({ x: secondaryX, y: minY + 2 }, { x: secondaryX, y: maxY - 2 })
+    paths.push(secondary)
+    points.push(...secondary)
+  }
+
+  return { points: uniquePoints(points), paths, primaryX, primaryY }
+}
+
+function routeRoomToSpine(canvas: GridCanvas, room: RoomPlacement, spinePoints: Point[]): Point[] | null {
+  const center = roomCenter(room)
+  const target = nearestPoint(center, spinePoints)
+  if (!target) return null
+
+  const candidates = getRoomEdgePoints(room)
+    .map(edge => offsetFromRoom(edge, room))
+    .map(start => {
+      const direct = getOrthogonalPath(start, target)
+      const alt = [
+        ...getOrthogonalPath(start, { x: start.x, y: target.y }),
+        ...getOrthogonalPath({ x: start.x, y: target.y }, target).slice(1),
+      ]
+      return [direct, alt]
+    })
+    .flat()
+    .sort((a, b) => a.length - b.length)
+
+  for (const path of candidates) {
+    if (isSafeCorridorPath(canvas, path)) return path
+  }
+
+  return routeRoomToAnyCorridor(canvas, room)
+}
+
+function carveServiceBypass(
+  canvas: GridCanvas,
+  placements: RoomPlacement[],
+  spine: { points: Point[]; primaryX: number; primaryY: number },
+  allCorridorTiles: Set<string>
+): void {
+  const leftRooms = placements
+    .filter(room => roomCenter(room).x < spine.primaryX)
+    .sort((a, b) => roomCenter(a).y - roomCenter(b).y)
+  const rightRooms = placements
+    .filter(room => roomCenter(room).x >= spine.primaryX)
+    .sort((a, b) => roomCenter(a).y - roomCenter(b).y)
+
+  for (const side of [leftRooms, rightRooms]) {
+    if (side.length < 3) continue
+    const mid = side[Math.floor(side.length / 2)]
+    const target = nearestPoint(roomCenter(mid), spine.points)
+    if (!target) continue
+    const edge = offsetFromRoom(getRoomEdgePoints(mid)[0], mid)
+    const path = getOrthogonalPath(edge, target)
+    if (isSafeCorridorPath(canvas, path)) {
+      carveCorridorPath(canvas, path, connectorIdForRooms(mid.roomId, 'bypass'), allCorridorTiles)
+    }
+  }
+}
+
+function carveCorridorPath(
+  canvas: GridCanvas,
+  path: Point[],
+  corridorId: string,
+  allCorridorTiles: Set<string>
+): void {
+  for (const p of path) {
+    const tile = getTile(canvas, p.x, p.y)
+    if (!tile || tile.type === TileType.FLOOR || tile.type === TileType.DOOR) continue
+
+    if (
+      tile.type === TileType.VOID ||
+      tile.type === TileType.HULL ||
+      tile.type === TileType.CORRIDOR ||
+      tile.type === TileType.JUNCTION
+    ) {
+      canvas.tiles[p.y][p.x] = addConnectorIdToTile(
+        { ...tile, type: tile.type === TileType.JUNCTION ? TileType.JUNCTION : TileType.CORRIDOR },
+        corridorId
+      )
+      allCorridorTiles.add(`${p.x},${p.y}`)
+    }
+  }
+}
+
+function isSafeCorridorPath(canvas: GridCanvas, path: Point[]): boolean {
+  return path.every(p => {
+    const tile = getTile(canvas, p.x, p.y)
+    return !!tile && (
+      tile.type === TileType.VOID ||
+      tile.type === TileType.HULL ||
+      tile.type === TileType.CORRIDOR ||
+      tile.type === TileType.JUNCTION
+    )
+  })
+}
+
+function chooseLeastObstructedColumn(canvas: GridCanvas, preferredX: number, minY: number, maxY: number): number {
+  let bestX = Math.max(1, Math.min(canvas.width - 2, preferredX))
+  let bestScore = Infinity
+
+  for (let x = Math.max(1, preferredX - 8); x <= Math.min(canvas.width - 2, preferredX + 8); x++) {
+    let score = Math.abs(x - preferredX) * 0.25
+    for (let y = minY; y <= maxY; y++) {
+      const tile = getTile(canvas, x, y)
+      if (tile?.type === TileType.FLOOR || tile?.type === TileType.DOOR) score += 20
+      else if (tile?.type === TileType.VOID) score += 0.8
+    }
+    if (score < bestScore) {
+      bestScore = score
+      bestX = x
+    }
+  }
+
+  return bestX
+}
+
+function chooseLeastObstructedRow(canvas: GridCanvas, preferredY: number, minX: number, maxX: number): number {
+  let bestY = Math.max(1, Math.min(canvas.height - 2, preferredY))
+  let bestScore = Infinity
+
+  for (let y = Math.max(1, preferredY - 8); y <= Math.min(canvas.height - 2, preferredY + 8); y++) {
+    let score = Math.abs(y - preferredY) * 0.25
+    for (let x = minX; x <= maxX; x++) {
+      const tile = getTile(canvas, x, y)
+      if (tile?.type === TileType.FLOOR || tile?.type === TileType.DOOR) score += 20
+      else if (tile?.type === TileType.VOID) score += 0.8
+    }
+    if (score < bestScore) {
+      bestScore = score
+      bestY = y
+    }
+  }
+
+  return bestY
+}
+
+function nearestPoint(point: Point, points: Point[]): Point | null {
+  let nearest: Point | null = null
+  let nearestDist = Infinity
+  for (const candidate of points) {
+    const dist = manhattanDistance(point, candidate)
+    if (dist < nearestDist) {
+      nearestDist = dist
+      nearest = candidate
+    }
+  }
+  return nearest
+}
+
+function uniquePoints(points: Point[]): Point[] {
+  const seen = new Set<string>()
+  const result: Point[] = []
+  for (const point of points) {
+    const key = `${point.x},${point.y}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(point)
+  }
+  return result
+}
+
+function routeCorridorsPeerToPeer(
+  canvas: GridCanvas,
+  placements: RoomPlacement[],
+  loopiness: number,
+  rng: SeededRNG
+): Point[] {
   // Step 1: Build connection graph
   const connections = buildConnectionGraph(placements, loopiness, rng)
 
@@ -67,7 +305,8 @@ export function routeCorridors(
 
   for (const conn of connections) {
     const path = routeConnection(canvas, conn, allCorridorTiles)
-    const corridorId = `${conn.fromRoom.roomId}_${conn.toRoom.roomId}`
+    const corridorId = connectorIdForRooms(conn.fromRoom.roomId, conn.toRoom.roomId)
+    if (path.length < 2) continue
 
     // Carve the corridor path
     for (const p of path) {
@@ -76,12 +315,10 @@ export function routeCorridors(
       if (!tile) continue
 
       if (tile.type === TileType.HULL) {
-        canvas.tiles[p.y][p.x] = {
-          type: TileType.CORRIDOR,
-          corridorId,
-        }
+        canvas.tiles[p.y][p.x] = addConnectorIdToTile({ type: TileType.CORRIDOR }, corridorId)
+        canvas.tiles[p.y][p.x] = addConnectorIdToTile(tile, corridorId)
         allCorridorTiles.add(key)
-      } else if (tile.type === TileType.CORRIDOR) {
+      } else if (tile.type === TileType.CORRIDOR || tile.type === TileType.JUNCTION) {
         // Corridor crosses existing corridor — this becomes a junction!
         allCorridorTiles.add(key)
       }
@@ -398,16 +635,15 @@ function aStarRoute(
   }
 
   // No path found — return direct L-shaped path through whatever is there
-  const fallback = getOrthogonalPath(from, to)
-  return fallback
+  return []
 }
 
-function reconstructPath(parentMap: Map<string, Point>, end: Point): Point[] {
+function reconstructPath(parentMap: Map<string, Point | null>, end: Point): Point[] {
   const path: Point[] = []
   let current: Point | undefined = end
   while (current) {
     path.unshift(current)
-    current = parentMap.get(`${current.x},${current.y}`)
+    current = parentMap.get(`${current.x},${current.y}`) ?? undefined
   }
   return path
 }
@@ -441,7 +677,9 @@ function createJunctions(canvas: GridCanvas): Point[] {
         }
       }
 
-      // 3+ neighbors = junction (T-intersection or crossroad)
+      // 3+ neighbors = topological branch. Shared straight trunk tiles are not
+      // visual junctions; otherwise the renderer shows bead-like dots on every
+      // overlapped corridor tile.
       if (corridorNeighbors >= 3) {
         canvas.tiles[y][x] = {
           ...canvas.tiles[y][x],
@@ -569,51 +807,31 @@ export function ensureConnectivity(
   placements: RoomPlacement[],
   existingCorridors: Set<string>
 ): void {
-  // Build adjacency from door positions
-  const connected = new Set<string>()
-  const roomsWithDoors = placements.filter(p => p.doorPositions.length > 0)
-
-  if (roomsWithDoors.length === 0 && placements.length > 0) {
-    // No rooms have doors — connect all rooms to nearest corridors
-    for (const room of placements) {
-      connectRoomToNearestCorridor(canvas, room, existingCorridors)
-    }
-    return
-  }
-
-  // BFS from first room with doors
-  if (roomsWithDoors.length > 0) {
-    const queue = [roomsWithDoors[0].roomId]
-    connected.add(queue[0])
-
-    while (queue.length > 0) {
-      const roomId = queue.shift()!
-      const room = placements.find(p => p.roomId === roomId)
-      if (!room) continue
-
-      // Find all rooms reachable through corridors from this room's doors
-      for (const otherRoom of placements) {
-        if (connected.has(otherRoom.roomId)) continue
-        if (otherRoom.doorPositions.length > 0) {
-          connected.add(otherRoom.roomId)
-          queue.push(otherRoom.roomId)
-        }
-      }
-    }
-  }
+  const analysis = analyzeConnectivity(canvas, placements)
+  const connected = analysis.reachableRoomIds
 
   // Connect isolated rooms
   const isolated = placements.filter(p => !connected.has(p.roomId))
   for (const room of isolated) {
-    connectRoomToNearestCorridor(canvas, room, existingCorridors)
+    if (!connectRoomToNearestCorridor(canvas, room, existingCorridors, placements) && placements[0]) {
+      connectRoomToRoom(canvas, room, placements[0], existingCorridors)
+    }
+  }
+
+  for (const room of placements) {
+    if (room.doorPositions.length === 0) {
+      connectRoomToNearestCorridor(canvas, room, existingCorridors, placements)
+    }
+    updateDoorPositions(canvas, room)
   }
 }
 
 function connectRoomToNearestCorridor(
   canvas: GridCanvas,
   room: RoomPlacement,
-  existingCorridors: Set<string>
-): void {
+  existingCorridors: Set<string>,
+  placements: RoomPlacement[]
+): boolean {
   // Find nearest corridor tile
   const center = roomCenter(room)
   let nearest: Point | null = null
@@ -632,25 +850,132 @@ function connectRoomToNearestCorridor(
     }
   }
 
-  if (!nearest) return
+  if (!nearest) {
+    const nearestRoom = findNearestRoom(room, placements)
+    return nearestRoom ? connectRoomToRoom(canvas, room, nearestRoom, existingCorridors) : false
+  }
 
   // Find room edge closest to corridor
   const edge = findClosestEdgePoint(room, nearest)
 
-  // Carve L-shaped corridor from edge to nearest corridor
-  const path = getOrthogonalPath(edge, nearest)
-  for (const p of path) {
-    const tile = getTile(canvas, p.x, p.y)
-    if (tile && tile.type === TileType.HULL) {
-      canvas.tiles[p.y][p.x] = {
-        type: TileType.CORRIDOR,
-        corridorId: `connect_${room.roomId}`,
-      }
+  const path = aStarRoute(canvas, edge, nearest, room, room, existingCorridors)
+  const safePath = path.length >= 2
+    ? path
+    : tryRepairLPath(canvas, edge, nearest) ?? routeRoomToAnyCorridor(canvas, room)
+  if (!safePath || safePath.length < 2) return false
+
+  const corridorId = connectorIdForRooms(room.roomId, 'repair')
+    for (const p of safePath) {
+      const tile = getTile(canvas, p.x, p.y)
+    if (tile && (tile.type === TileType.VOID || tile.type === TileType.HULL || tile.type === TileType.CORRIDOR || tile.type === TileType.JUNCTION)) {
+      canvas.tiles[p.y][p.x] = addConnectorIdToTile(
+        { ...tile, type: (tile.type === TileType.HULL || tile.type === TileType.VOID) ? TileType.CORRIDOR : tile.type },
+        corridorId
+      )
       existingCorridors.add(`${p.x},${p.y}`)
     }
   }
 
   updateDoorPositions(canvas, room)
+  return true
+}
+
+function connectRoomToRoom(
+  canvas: GridCanvas,
+  fromRoom: RoomPlacement,
+  toRoom: RoomPlacement,
+  existingCorridors: Set<string>
+): boolean {
+  const { from, to } = findClosestWallPoints(fromRoom, toRoom)
+  const corridorId = connectorIdForRooms(fromRoom.roomId, toRoom.roomId)
+  const lPath = tryLShapedPath(canvas, from, to, fromRoom, toRoom, existingCorridors)
+    ?? tryLShapedPath(canvas, from, to, fromRoom, toRoom, existingCorridors, true)
+  const path = lPath ?? aStarRoute(canvas, from, to, fromRoom, toRoom, existingCorridors)
+  const safePath = path.length >= 2 ? path : tryRepairLPath(canvas, from, to)
+
+  if (!safePath || safePath.length < 2) return false
+
+  for (const p of safePath) {
+    const tile = getTile(canvas, p.x, p.y)
+    if (tile && (tile.type === TileType.HULL || tile.type === TileType.CORRIDOR || tile.type === TileType.JUNCTION)) {
+      canvas.tiles[p.y][p.x] = addConnectorIdToTile(
+        { ...tile, type: tile.type === TileType.HULL ? TileType.CORRIDOR : tile.type },
+        corridorId
+      )
+      existingCorridors.add(`${p.x},${p.y}`)
+    }
+  }
+
+  updateDoorPositions(canvas, fromRoom)
+  updateDoorPositions(canvas, toRoom)
+  return true
+}
+
+function routeRoomToAnyCorridor(canvas: GridCanvas, room: RoomPlacement): Point[] | null {
+  const starts = getRoomEdgePoints(room)
+    .map(point => offsetFromRoom(point, room))
+    .filter(point => {
+      const tile = getTile(canvas, point.x, point.y)
+      return tile && (
+        tile.type === TileType.VOID ||
+        tile.type === TileType.HULL ||
+        tile.type === TileType.CORRIDOR ||
+        tile.type === TileType.JUNCTION
+      )
+    })
+
+  const queue: Point[] = [...starts]
+  const visited = new Set<string>()
+  const parent = new Map<string, Point | null>()
+  for (const start of starts) parent.set(`${start.x},${start.y}`, null)
+
+  while (queue.length > 0) {
+    const current = queue.shift()!
+    const currentKey = `${current.x},${current.y}`
+    if (visited.has(currentKey)) continue
+    visited.add(currentKey)
+
+    const tile = getTile(canvas, current.x, current.y)
+    if (tile && (tile.type === TileType.CORRIDOR || tile.type === TileType.JUNCTION)) {
+      return reconstructPath(parent, current)
+    }
+
+    for (const dir of DIRECTIONS_4) {
+      const next = { x: current.x + dir.x, y: current.y + dir.y }
+      const nextKey = `${next.x},${next.y}`
+      if (visited.has(nextKey) || parent.has(nextKey)) continue
+
+      const nextTile = getTile(canvas, next.x, next.y)
+      if (!nextTile || (
+        nextTile.type !== TileType.VOID &&
+        nextTile.type !== TileType.HULL &&
+        nextTile.type !== TileType.CORRIDOR &&
+        nextTile.type !== TileType.JUNCTION
+      )) continue
+
+      parent.set(nextKey, current)
+      queue.push(next)
+    }
+  }
+
+  return null
+}
+
+function findNearestRoom(room: RoomPlacement, placements: RoomPlacement[]): RoomPlacement | null {
+  const center = roomCenter(room)
+  let nearest: RoomPlacement | null = null
+  let nearestDist = Infinity
+
+  for (const candidate of placements) {
+    if (candidate.roomId === room.roomId) continue
+    const dist = manhattanDistance(center, roomCenter(candidate))
+    if (dist < nearestDist) {
+      nearestDist = dist
+      nearest = candidate
+    }
+  }
+
+  return nearest
 }
 
 // ============================================================================
@@ -687,13 +1012,31 @@ function widenCorridor(
     const ny = p.y + oy
     const tile = getTile(canvas, nx, ny)
     if (tile && tile.type === TileType.HULL) {
-      canvas.tiles[ny][nx] = {
-        type: TileType.CORRIDOR,
-        corridorId,
-      }
+      canvas.tiles[ny][nx] = addConnectorIdToTile({ type: TileType.CORRIDOR }, corridorId)
       allCorridorTiles.add(`${nx},${ny}`)
     }
   }
+}
+
+function tryRepairLPath(canvas: GridCanvas, from: Point, to: Point): Point[] | null {
+  const candidates = [
+    getOrthogonalPath(from, to),
+    [...getOrthogonalPath(from, { x: from.x, y: to.y }), ...getOrthogonalPath({ x: from.x, y: to.y }, to).slice(1)],
+  ]
+
+  for (const path of candidates) {
+    const isSafe = path.every(p => {
+      const tile = getTile(canvas, p.x, p.y)
+      return tile && (
+        tile.type === TileType.HULL ||
+        tile.type === TileType.CORRIDOR ||
+        tile.type === TileType.JUNCTION
+      )
+    })
+    if (isSafe) return path
+  }
+
+  return null
 }
 
 // ============================================================================

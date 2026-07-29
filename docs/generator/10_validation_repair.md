@@ -41,3 +41,49 @@ Repair делает максимум N итераций (например 12).
 Если не удалось:
 - вернуть “лучший” вариант + issues (чтобы редактор мог показать предупреждения),
 - или fallback‑генерация с более простым layout grammar (readability↑).
+
+## 10.5 Implemented now
+
+Текущий генератор и новый playability validator решают разные задачи:
+
+* generation-time connectivity использует flood-fill по `FLOOR`, `DOOR`,
+  `CORRIDOR`, `JUNCTION`, `AIRLOCK`;
+* router не объявляет успешным прямой fallback через заблокированные room tiles;
+* generation-time connectivity repair сначала подключает isolated room к
+  существующему corridor component, затем пробует room-to-room route;
+* после размещения doors связность проверяется повторно;
+* `validateTTRPGPlayability()` выполняет только read-only диагностику и никогда
+  не изменяет canvas.
+
+Каждая playability-диагностика содержит `code`, `severity`, `message`, `hint`,
+а где применимо — `roomIds`, `actual`, `threshold`.
+
+Реализованные коды:
+
+* `ROOMS_DISCONNECTED` (`error`);
+* `CRITICAL_ROOM_UNREACHABLE` (`error`);
+* `HIGH_CORRIDOR_DEAD_END_RATIO` (`warning`);
+* `LOW_JUNCTION_COUNT` (`warning`);
+* `LOW_ROUTE_REDUNDANCY` (`warning`);
+* `NO_ENTRY_ROOM` (`info`).
+
+Компактный экспорт в MapJSON сохраняет status и
+`playabilityViolationCodes`; полный structured report доступен через API
+валидатора. Наличие warning не означает, что карта структурно невалидна.
+
+## 10.6 Next
+
+Обобщённый deterministic auto-repair pipeline из 10.3 ещё не реализован.
+Текущий connectivity repair — локальная часть генератора, а не универсальный
+repair engine для редактора.
+
+Остаются:
+
+* pressurization graph и проверка vacuum↔airlock↔pressurized boundaries;
+* семантическая валидация bulkhead, secure checkpoint, vents/service hatches;
+* проверка connector→port и «люков в никуда» на всех слоях;
+* preview/confirm/undo для repair в редакторе;
+* bounded repair iterations, best-candidate return и fallback grammar;
+* geometry overlap/repair для polygon rooms;
+* service-loop и security-bypass repair;
+* props/setpiece-aware validation.

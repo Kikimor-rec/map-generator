@@ -63,3 +63,33 @@ Room Program отвечает за: “какие помещения вообщ�
 - `criticalPairs` для метрик (например, bridge↔engineering, ops↔dock, hab↔med)
 - `zoneTargets` (сколько зон и их веса)
 - `budgetSummary` (сколько rooms/junctions/utility)
+
+## 3.8 Active occupancy functional placement
+
+`functionalRoomPlacement.ts` supplies a deterministic, side-effect-free score
+and named debug factors. Active occupancy generation calls
+`rankFunctionalRoomSlots()` before carving each programmed room:
+
+* ship command rooms prefer the bow, engineering/reactor prefer the stern,
+  while cargo/access prefer exterior mid-aft slots;
+* station command prefers the hub, habitation prefers the ring, and
+  docking/access prefers the perimeter;
+* clustered outposts assign every non-VOID tile to its nearest hull module;
+  hub tiles receive the `main` zone, while satellite module kind selects
+  `support` or `specialized`;
+* outpost slot candidates carry `moduleRole` and `moduleKind`, allowing command
+  to prefer the hub and habitation, utility, science, industrial, security,
+  logistics, and access rooms to prefer matching satellites;
+* exact hull-mask exterior contact is passed into scoring rather than inferred
+  only from the rectangular canvas bounds.
+
+The scorer ranks candidates; hull containment, collision checks, carving, and
+door placement remain separate placement-stage responsibilities.
+
+Current limits:
+
+* room bays remain rectangular, mask-aware slots anchored to circulation runs;
+* placement is sequential and has no global adjacency/forbidden-adjacency
+  optimization or constraint solve;
+* scoring does not create polygon rooms, room-internal layout, or functional
+  props, so room roles are not yet reliably recognizable without labels.

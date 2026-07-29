@@ -1,6 +1,9 @@
 # 08 — Метрики качества (TTRPG) и пороги
 
-Модуль обязан считать метрики и возвращать их в `meta.metrics`.
+Разделы 8.1–8.5 описывают целевой контракт качества. Фактически реализованный
+срез перечислен в 8.6; генератор возвращает его в `meta.ttrpgMetrics`.
+Отсутствующие целевые метрики нельзя считать реализованными только по наличию
+похожего сигнала.
 
 ## 8.1 Must‑метрики (всегда)
 - `ConnectivityOK`: boolean
@@ -52,3 +55,67 @@
   - секретными обходами,
   - “опасными” зонами,
   - сценическими узлами (реактор, ангар, медблок с карантином).
+
+## 8.6 Implemented now: physical-grid playability report
+
+`src/generators/gridGenerator/playabilityValidator.ts` выполняет
+детерминированный read-only анализ активных `GridCanvas` и `RoomPlacement[]`.
+Он не меняет canvas и не запускает repair.
+
+Полный structured report считает:
+
+* долю комнат в крупнейшем связном компоненте и список isolated rooms;
+* число/долю corridor dead ends, junction count и максимальную степень junction;
+* reachable room-pair percentage, среднюю и максимальную кратчайшую дистанцию;
+* longest critical-room pair path и среднюю entry→critical дистанцию;
+* достижимость primary/critical rooms от entry;
+* physical circulation cycle rank;
+* долю critical/entry пар с edge-redundant маршрутом;
+* число физических рёбер перехода между зонами и список пар зон.
+
+Сигнал альтернативного маршрута проверяется между corridor-side ingress
+точками комнат после удаления graph bridges. Он подтверждает физическую
+edge-redundancy, но не доказывает сюжетную независимость, скрытность или
+наличие отдельной service/vent сети.
+
+Entry rooms определяются по `isExterior` и dock/airlock-подобной семантике.
+Если entry не найден, отчёт явно ставит
+`entryBasis: "fallback-first-room"` и добавляет информационную диагностику;
+такой fallback нельзя представлять как проверенную доступность от шлюза.
+
+Пороги мягкие и archetype/size-aware:
+
+* connectivity и critical reachability требуют 100%;
+* допустимая доля тупиков зависит от archetype и size tier;
+* рекомендуемый минимум junctions растёт с размером;
+* alternate-route threshold включается только при переданном
+  `requestedLoopiness >= 0.35`;
+* caller может явно переопределить thresholds.
+
+Компактный срез экспортируется в `meta.ttrpgMetrics`:
+
+* `playabilityStatus`;
+* `connectedRoomPercent`, `isolatedRooms`;
+* `loopCount`, `circulationCycleRank`;
+* `deadEndRatio`, `corridorDeadEndCount`;
+* `junctionCount`, `maxJunctionDegree`, `averageCorridorTurns`;
+* `criticalReachability`, `reachableRoomPairPercent`;
+* `alternateRoutePairPercent`;
+* `averageRoomRouteDistance`, `longestRoomRouteDistance`;
+* `criticalRoomPairPathDistance`, `averageEntryToCriticalDistance`;
+* `zoneTransitionCount`;
+* `playabilityViolationCodes`.
+
+`playabilityStatus` имеет значения `pass | warning | error`. Warning означает
+нарушение мягкого TTRPG-порога, а не структурную поломку карты.
+
+## 8.7 Next
+
+Ещё не реализованы:
+
+* semantic `AltPathsCriticalMin` как число независимых main/service/vent путей;
+* `ReadabilityScore`, `ChokepointCount`, setpiece и stealth/security metrics;
+* сюжетная оценка encounter pockets и dangerous zones;
+* service loops корабля и полноценные ventilation/service layers;
+* автоматическое исправление найденных playability violations;
+* метрики polygon rooms и узнаваемости props.

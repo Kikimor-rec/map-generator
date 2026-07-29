@@ -3,7 +3,7 @@
  * Tile-based map generation system
  */
 
-import type { Archetype, SizeTier, SeededRNG, GenerationRequest, ProgrammedRoom } from '../types'
+import type { Archetype, SizeTier, SeededRNG, GenerationRequest, ProgrammedRoom, RoomCirculationRole } from '../types'
 
 // ============================================================================
 // TILE TYPES
@@ -86,6 +86,42 @@ export interface HullConfig {
   symmetry: number
 }
 
+export interface HullModule {
+  /** Stable identifier within the generated hull layout. */
+  id: string
+  center: Point
+  radius: number
+  kind: 'hub' | 'satellite'
+}
+
+export interface HullLink {
+  /** Stable identifier within the generated hull layout. */
+  id: string
+  fromModuleId: string
+  toModuleId: string
+  /** Raw centerline carved into the hull mask. */
+  centerline: Point[]
+  kind: 'primary' | 'loop'
+}
+
+/**
+ * Optional construction metadata returned by hull generators that have a
+ * meaningful internal module topology.
+ */
+export interface HullLayout {
+  kind: 'clustered-outpost'
+  modules: HullModule[]
+  links: HullLink[]
+}
+
+/**
+ * Optional inputs that affect topology-bearing hulls. Omitting the context
+ * preserves the historical clustered-hull link probability.
+ */
+export interface HullCarveContext {
+  loopiness?: number
+}
+
 // ============================================================================
 // ZONES
 // ============================================================================
@@ -155,6 +191,8 @@ export interface RoomPlacement {
   zone: string
   /** Door positions (adjacent to corridors) */
   doorPositions: Point[]
+  /** Actual generated circulation role after all viable ports are carved. */
+  circulationRole: RoomCirculationRole
   /** Original program data */
   program: ProgrammedRoom
 }
