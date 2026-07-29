@@ -265,8 +265,13 @@ export type LayoutConnectorEndpointAnchor =
       position: Point
     }
 
+export type ConnectorRepresentation =
+  | 'room-route-v1'
+  | 'physical-topology-edge-v1'
+
 export interface LayoutConnector {
   id: string
+  representation?: ConnectorRepresentation
   fromRoomId: string
   toRoomId: string
   kind: ConnectorKind

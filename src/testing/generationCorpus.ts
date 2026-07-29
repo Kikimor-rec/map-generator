@@ -88,7 +88,7 @@ export const GENERATION_CORPUS = [
     expected: {
       caseId: 'ship-courier-xs',
       requestHash: '6fec9acd',
-      documentHash: 'ca9ae272',
+      documentHash: 'e7fffe48',
       roomCount: 6,
       connectorCount: 10,
       issueCodes: [],
@@ -112,7 +112,7 @@ export const GENERATION_CORPUS = [
     expected: {
       caseId: 'station-research-xs',
       requestHash: 'b181239f',
-      documentHash: 'd548822d',
+      documentHash: 'e3c900eb',
       roomCount: 7,
       connectorCount: 24,
       issueCodes: [],
@@ -136,7 +136,7 @@ export const GENERATION_CORPUS = [
     expected: {
       caseId: 'outpost-mining-xs',
       requestHash: '0cf94283',
-      documentHash: '1b785785',
+      documentHash: '18f2510d',
       roomCount: 4,
       connectorCount: 24,
       issueCodes: [],
@@ -165,7 +165,7 @@ export const GENERATION_HISTORICAL_INPUTS = [
     expected: {
       caseId: 'ship-freighter-qwhjgv9k-historical-grid-smoke',
       requestHash: '70491d9e',
-      documentHash: '479685c8',
+      documentHash: 'b5e7d728',
       roomCount: 18,
       connectorCount: 26,
       issueCodes: [],

@@ -19,6 +19,7 @@ import type {
   SizeTier,
   StyleProfile
 } from './types'
+import { normalizeConnectorRepresentation } from './connectorRepresentation'
 
 import type {
   Room,
@@ -294,7 +295,10 @@ function buildMapJSON(
       gridWidth: layout.gridWidth,
       gridHeight: layout.gridHeight,
       rooms: layout.rooms,
-      connectors: layout.connectors,
+      connectors: layout.connectors.map(connector => ({
+        ...connector,
+        representation: 'room-route-v1',
+      })),
       junctions: layout.junctions
     }))
   }
@@ -477,13 +481,36 @@ export function convertToEditorFormat(
     crossingPenalty: routingOptions?.crossingPenalty ?? DEFAULT_ROUTING_COSTS.crossingPenalty,
   }
   
-  const allConnectorsAreGridGraphEdges = deck.connectors.every(connector => connector.id.startsWith('corridor-edge-'))
+  const connectorsWithRepresentation = deck.connectors.map(connector => ({
+    connector,
+    representation: normalizeConnectorRepresentation(connector),
+  }))
+  const physicalConnectors = connectorsWithRepresentation.filter(
+    entry => entry.representation === 'physical-topology-edge-v1'
+  )
+  const physicalConnectorIds = new Set(
+    physicalConnectors.map(entry => entry.connector.id)
+  )
+  const physicalRoomPortKeys = new Set<string>()
+
+  for (const { connector } of physicalConnectors) {
+    for (const anchor of [connector.startAnchor, connector.endAnchor]) {
+      if (anchor?.kind === 'roomPort') {
+        physicalRoomPortKeys.add(`${anchor.roomId}:${anchor.portId}`)
+      }
+    }
+  }
 
   // Convert rooms to core Room type
   const rooms: Room[] = deck.rooms.map(layoutRoom => {
     const roomType = mapRoomTypeId(layoutRoom.roomType)
-    const roomDoors: Door[] = allConnectorsAreGridGraphEdges
-      ? layoutRoom.ports.map(port => {
+    const roomDoors: Door[] = layoutRoom.ports
+      .filter(port =>
+        physicalRoomPortKeys.has(`${layoutRoom.id}:${port.id}`) ||
+        (port.connectorId !== null && physicalConnectorIds.has(port.connectorId)) ||
+        (port.connectorId === null && physicalConnectors.length > 0)
+      )
+      .map(port => {
           const doorType = getDoorType(port.doorType ?? 'standard')
           return {
             id: `door-${port.id}`,
@@ -503,7 +530,6 @@ export function convertToEditorFormat(
             boundarySide: port.wall,
           }
         })
-      : []
     return {
       id: layoutRoom.id,
       type: roomType,
@@ -532,8 +558,8 @@ export function convertToEditorFormat(
   })
   
   // Convert connectors to core Corridor type
-  const corridors: Corridor[] = deck.connectors.map(connector => {
-    const isGridGraphEdge = connector.id.startsWith('corridor-edge-')
+  const corridorEntries = connectorsWithRepresentation.map(({ connector, representation }) => {
+    const isPhysicalTopologyEdge = representation === 'physical-topology-edge-v1'
     // Accept both legacy MapJSON path and quality-pipeline waypoints-only connectors
     const path = (connector as any).path ?? (connector as any).waypoints ?? []
     const fromRoomId = (connector as any).fromRoomId ?? (connector as any).fromPort?.roomId ?? connector.fromRoomId
@@ -545,31 +571,31 @@ export function convertToEditorFormat(
       : pathToOrthogonalSegments(path)
     
     // Find attachments
-    const startAttachment = !isGridGraphEdge && path.length > 0
+    const startAttachment = !isPhysicalTopologyEdge && path.length > 0
       ? findRoomAttachment(fromRoomId, path[0], rooms)
       : undefined
-    const endAttachment = !isGridGraphEdge && path.length > 0
+    const endAttachment = !isPhysicalTopologyEdge && path.length > 0
       ? findRoomAttachment(toRoomId, path[path.length - 1], rooms)
       : undefined
-    const startAnchor = isGridGraphEdge
+    const startAnchor = isPhysicalTopologyEdge
       ? toCoreEndpointAnchor(connector.startAnchor)
       : toCoreEndpointAnchor(
           connector.startAnchor ??
           findExactLayoutPortAnchor(fromRoomId, path[0], deck.rooms, false)
         )
-    const endAnchor = isGridGraphEdge
+    const endAnchor = isPhysicalTopologyEdge
       ? toCoreEndpointAnchor(connector.endAnchor)
       : toCoreEndpointAnchor(
           connector.endAnchor ??
           findExactLayoutPortAnchor(toRoomId, path[path.length - 1], deck.rooms, false)
         )
     
-    return {
+    const corridor: Corridor = {
       id: connector.id,
       style: CorridorStyleEnum.Standard,
       segments,
       segmentIds: (connector as any).segmentIds,
-      width: isGridGraphEdge ? Math.max(18, Math.min(28, connector.width ?? 24)) : 40,
+      width: isPhysicalTopologyEdge ? Math.max(18, Math.min(28, connector.width ?? 24)) : 40,
       color: undefined,
       doors: [],
       connectedRoomIds: [fromRoomId, toRoomId].filter(Boolean),
@@ -579,14 +605,20 @@ export function convertToEditorFormat(
       startAnchor,
       endAnchor,
     }
+
+    return { corridor, representation }
   })
   
-  // Grid graph connectors are already physical topological edges. Legacy coalescing is
-  // room-to-room cleanup and can corrupt graph-edge rendering by merging unrelated edges.
-  const coalescedCorridors = allConnectorsAreGridGraphEdges
-    ? corridors
-    : coalesceCorridors(
-        corridors,
+  // Physical topology connectors are already graph edges. Room-route coalescing is
+  // legacy cleanup and must never merge or otherwise mutate physical edges.
+  const physicalCorridors = corridorEntries
+    .filter(entry => entry.representation === 'physical-topology-edge-v1')
+    .map(entry => entry.corridor)
+  const roomRouteCorridors = corridorEntries
+    .filter(entry => entry.representation === 'room-route-v1')
+    .map(entry => entry.corridor)
+  const coalescedRoomRouteCorridors = coalesceCorridors(
+        roomRouteCorridors,
         {
           ...DEFAULT_COALESCE_SETTINGS,
           enabled: routing.coalesceEnabled,
@@ -594,15 +626,21 @@ export function convertToEditorFormat(
           minSharedLength: 15,
         }
       ).corridors
+  const coalescedCorridors = [
+    ...physicalCorridors,
+    ...coalescedRoomRouteCorridors,
+  ]
   
   // Generate doors at room-corridor connections
   const doors: Door[] = []
 
-  if (!allConnectorsAreGridGraphEdges) {
-    for (const connector of deck.connectors) {
-      if (connector.path.length >= 2) {
+  for (const { connector, representation } of connectorsWithRepresentation) {
+    if (representation !== 'room-route-v1') continue
+
+    const path = (connector as any).path ?? (connector as any).waypoints ?? []
+    if (path.length >= 2) {
         // Door at start
-        const startPoint = connector.path[0]
+        const startPoint = path[0]
         doors.push({
           id: `door-${connector.id}-start`,
           type: getDoorType(connector.kind),
@@ -615,7 +653,7 @@ export function convertToEditorFormat(
         })
 
         // Door at end
-        const endPoint = connector.path[connector.path.length - 1]
+        const endPoint = path[path.length - 1]
         doors.push({
           id: `door-${connector.id}-end`,
           type: getDoorType(connector.kind),
@@ -626,7 +664,6 @@ export function convertToEditorFormat(
           isLocked: false,
           securityLevel: 0
         })
-      }
     }
   }
   

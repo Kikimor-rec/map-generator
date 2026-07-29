@@ -292,6 +292,7 @@ function extractCorridors(canvas: GridCanvas, placements: RoomPlacement[]): Layo
       const orthogonalPath = orthogonalizeEndpointStubs(path, startAnchor, endAnchor, placements)
       return {
         id: `corridor-edge-${idx}`,
+        representation: 'physical-topology-edge-v1',
         fromRoomId: endpoints.fromRoomId,
         toRoomId: endpoints.toRoomId,
         kind: 'corridor',
