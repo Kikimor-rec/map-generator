@@ -51,3 +51,6 @@ coverage/
 *.pid
 *.seed
 *.pid.lock
+
+# Isolated agent worktrees
+.worktrees/
