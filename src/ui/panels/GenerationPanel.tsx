@@ -6,7 +6,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useEditor, actions } from '@store/EditorContext'
 import { DEFAULT_LAYERS, MAP_THEMES, MapThemeId } from '@core/types'
-import { DEFAULT_COALESCE_SETTINGS, DEFAULT_ROUTING_COSTS } from '@core/corridorTypes'
 import {
   generateMap,
   convertToEditorFormat,
@@ -18,16 +17,16 @@ import {
   type Subtype,
   type SizeTier,
   type StyleProfile,
+  type GenerationQualityProfile,
   type MapJSON,
   type CandidateSelectionObjectives,
   type CandidateSelectionSummary,
 } from '@generators/index'
-import {
-  type QualityMode,
-  QUALITY_MODE_CONFIGS,
-} from '@generators/quality'
 import type { GenerationWorkerResponse } from '../../workers/generationProtocol'
-import { buildGenerationWorkerRequest } from './generationPanelModel'
+import {
+  buildGenerationWorkerRequest,
+  getGenerationProfileOptions,
+} from './generationPanelModel'
 
 // TYPES
 interface GenerationPanelProps {
@@ -41,8 +40,6 @@ interface GenerationState {
   lastTiming: number | null
   error: string | null
   progress: number
-  candidatesEvaluated: number
-  qualityPhase: 'draft' | 'improved' | 'final' | null
 }
 
 // CONSTANTS
@@ -65,11 +62,7 @@ const STYLE_PROFILES: Array<{ value: StyleProfile; label: string }> = [
   { value: 'futurism', label: 'Futurism' },
 ]
 
-const QUALITY_MODES: Array<{ value: QualityMode; label: string; description: string }> = [
-  { value: 'draft', label: 'Draft', description: '< 200ms, quick preview' },
-  { value: 'standard', label: 'Standard', description: '< 2s, playable, up to 20 candidates' },
-  { value: 'polish', label: 'Polish', description: '< 10s, best quality' },
-]
+
 
 function fitViewportForEditorData(editorData: any): { x: number; y: number; zoom: number } {
   const points: Array<{ x: number; y: number }> = []
@@ -101,7 +94,6 @@ function fitViewportForEditorData(editorData: any): { x: number; y: number; zoom
 
 export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   const { dispatch } = useEditor()
-  const abortControllerRef = useRef<AbortController | null>(null)
   const activeRequestIdRef = useRef<string | null>(null)
 
   // Generation options
@@ -113,20 +105,8 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
   const [danger, setDanger] = useState(0.3)
   const [seed, setSeed] = useState('')
 
-  // Quality mode
-  const [qualityMode, setQualityMode] = useState<QualityMode>('standard')
-  const [useQualityPipeline, setUseQualityPipeline] = useState(false) // Disabled by default to use new grid generator
-
-  // Generator engine
-  const [generatorEngine, setGeneratorEngine] = useState<'grid' | 'legacy'>('grid')
-
-  // Advanced routing options
-  const [showAdvanced, setShowAdvanced] = useState(false)
-  const [coalesceEnabled, setCoalesceEnabled] = useState(DEFAULT_COALESCE_SETTINGS.enabled)
-  const [bendPenalty, setBendPenalty] = useState(DEFAULT_ROUTING_COSTS.bendPenalty)
-  const [reuseBonus, setReuseBonus] = useState(DEFAULT_ROUTING_COSTS.reuseBonus)
-  const [crossingPenalty, setCrossingPenalty] = useState(DEFAULT_ROUTING_COSTS.crossingPenalty)
-
+  const [qualityProfile, setQualityProfile] =
+    useState<GenerationQualityProfile>('standard')
   // Gallery mode - generate multiple variants
   const [galleryMode, setGalleryMode] = useState(false)
   const [variantCount, setVariantCount] = useState(4)
@@ -152,8 +132,6 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     lastTiming: null,
     error: null,
     progress: 0,
-    candidatesEvaluated: 0,
-    qualityPhase: null,
   })
   const [showSlowIndicator, setShowSlowIndicator] = useState(false)
   const [plainStatus, setPlainStatus] = useState<string | null>(null)
@@ -213,6 +191,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
 
   // Available subtypes
   const availableSubtypes = ARCHETYPE_CONFIGS[archetype].subtypes
+  const generationProfileOptions = getGenerationProfileOptions(sizeTier)
 
   const handleArchetypeChange = useCallback((newArchetype: Archetype) => {
     setArchetype(newArchetype)
@@ -257,9 +236,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     let timer: number | undefined
     if (genState.isGenerating) {
       timer = window.setTimeout(() => setShowSlowIndicator(true), 1000)
-      if (!useQualityPipeline) {
-        setPlainStatus('Generating...')
-      }
+      setPlainStatus('Generating...')
     } else {
       setShowSlowIndicator(false)
       setPlainStatus(null)
@@ -267,11 +244,11 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     return () => {
       if (timer) window.clearTimeout(timer)
     }
-  }, [genState.isGenerating, useQualityPipeline])
+  }, [genState.isGenerating])
 
-  // Simulated progress for non-quality runs (keeps the bar moving up to 90%)
+  // Simulated progress keeps the bar moving up to 90% between worker updates.
   useEffect(() => {
-    if (!genState.isGenerating || useQualityPipeline) return
+    if (!genState.isGenerating) return
     const timer = window.setInterval(() => {
       setGenState(s => {
         if (!s.isGenerating) return s
@@ -280,7 +257,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       })
     }, 250)
     return () => window.clearInterval(timer)
-  }, [genState.isGenerating, useQualityPipeline])
+  }, [genState.isGenerating])
 
   // Run generation
   // Worker Ref
@@ -293,21 +270,11 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       isGenerating: true,
       error: null,
       progress: 0,
-      candidatesEvaluated: 0,
-      qualityPhase: null,
     }))
     setPlainStatus(null)
 
     const useSeed = seed.trim() || generateRandomSeed()
     
-    // Capture routing options for use in callback
-    const routingOptions = {
-      coalesceEnabled,
-      bendPenalty,
-      reuseBonus,
-      crossingPenalty,
-    }
-
     // Initialize Worker
     if (workerRef.current) {
       workerRef.current.terminate();
@@ -350,7 +317,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
           // Logic to convert mapData to newProject for Dispatch
           // This logic is moved from the main thread execution to here
           try {
-            const editorData = convertToEditorFormat(mapData, 0, routingOptions);
+            const editorData = convertToEditorFormat(mapData);
             const name = mapData.meta.name;
             const description = `${mapData.meta.archetype} - ${mapData.meta.subtype}`;
             const metaData = {
@@ -432,8 +399,6 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               lastTiming: null,
               error: null,
               progress: 100,
-              candidatesEvaluated: metaData.candidatesEvaluated || 0,
-              qualityPhase: null,
             })
             setPlainStatus(null)
 
@@ -475,7 +440,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
         styleProfile,
         loopiness,
         danger,
-        qualityProfile: qualityMode,
+        qualityProfile,
       }));
 
     } catch (error: any) {
@@ -483,7 +448,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
       setGenState(s => ({ ...s, isGenerating: false, error: error.message }));
     }
 
-  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, qualityMode, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, generateRandomSeed, addToSeedHistory])
+  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, qualityProfile, generateRandomSeed, addToSeedHistory])
 
   const handleCancel = useCallback(() => {
     const requestId = activeRequestIdRef.current
@@ -500,7 +465,6 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
     setPreviewData(null)
     setGenState(s => ({ ...s, isGenerating: true, error: null, progress: 0 }))
 
-    const routingOptions = { coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty }
     const newVariants: typeof variants = []
     const masterSeed = seed.trim() || generateRandomSeed()
 
@@ -520,7 +484,6 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               loopiness,
               danger,
               qualityProfile: 'draft',
-              routing: routingOptions,
             }
 
             const result = generateMap(options)
@@ -528,7 +491,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               throw new Error(result.issues.map(issue => issue.message).join(', ') || 'Generation failed')
             }
 
-            const editorData = convertToEditorFormat(result.map, 0, routingOptions)
+            const editorData = convertToEditorFormat(result.map)
             const roomCount = editorData.rooms.length
             const corridorCount = editorData.corridors.length
 
@@ -575,7 +538,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
 
     setVariants(rankedVariants)
     setGenState(s => ({ ...s, isGenerating: false, progress: 100 }))
-  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, variantCount, coalesceEnabled, bendPenalty, reuseBonus, crossingPenalty, generateRandomSeed])
+  }, [seed, archetype, subtype, sizeTier, styleProfile, loopiness, danger, variantCount, generateRandomSeed])
 
   // Apply selected variant
   const handleApplyVariant = useCallback((index: number) => {
@@ -753,83 +716,66 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   </p>
                 </div>
 
+                {/* Generation Profile */}
+                <div className="space-y-1">
+                  <label className="label">Selection effort</label>
+                  <div className="grid grid-cols-3 gap-1">
+                    {generationProfileOptions.map(profile => (
+                      <button
+                        key={profile.id}
+                        onClick={() => setQualityProfile(profile.id)}
+                        className={`px-2 py-2 rounded text-sm font-medium border transition-all ${qualityProfile === profile.id
+                          ? 'bg-space-700 border-cyber-blue text-cyber-blue'
+                          : 'bg-space-800 border-space-600 text-space-300 hover:border-space-500'
+                        }`}
+                        title={profile.description}
+                      >
+                        <span className="block">{profile.label}</span>
+                        <span className="block text-[10px] font-normal">
+                          {profile.candidateCount} {profile.candidateCount === 1 ? 'candidate' : 'candidates'}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-space-400">
+                    {generationProfileOptions.find(profile => profile.id === qualityProfile)?.description}
+                  </p>
+                </div>
+
                 {/* ============ TIER 2: Secondary Parameters ============ */}
                 {showLevel2 && (
-                  <>
-                    {/* Quality Mode */}
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <label className="label">Quality mode</label>
-                        <label className="flex items-center gap-1 text-xs text-space-400">
-                          <input
-                            type="checkbox"
-                            checked={useQualityPipeline}
-                            onChange={e => setUseQualityPipeline(e.target.checked)}
-                            className="w-3 h-3"
-                          />
-                          Quality Pipeline
-                        </label>
+                  <div className="space-y-1">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={galleryMode}
+                        onChange={e => setGalleryMode(e.target.checked)}
+                        className="w-4 h-4 accent-cyber-blue"
+                      />
+                      <span className="text-sm text-space-200">Gallery mode</span>
+                    </label>
+                    {galleryMode && (
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="text-xs text-space-400">Variants:</span>
+                        {[2, 4, 6, 8].map(n => (
+                          <button
+                            key={n}
+                            onClick={() => setVariantCount(n)}
+                            className={`px-2 py-1 text-xs rounded ${variantCount === n
+                              ? 'bg-cyber-blue text-white'
+                              : 'bg-space-700 text-space-300 hover:bg-space-600'
+                            }`}
+                          >
+                            {n}
+                          </button>
+                        ))}
                       </div>
-                      {useQualityPipeline && (
-                        <>
-                          <div className="grid grid-cols-3 gap-1">
-                            {QUALITY_MODES.map(qm => (
-                              <button
-                                key={qm.value}
-                                onClick={() => setQualityMode(qm.value)}
-                                className={`px-2 py-2 rounded text-sm font-medium border transition-all ${qualityMode === qm.value
-                                  ? 'bg-space-700 border-cyber-blue text-cyber-blue'
-                                  : 'bg-space-800 border-space-600 text-space-300 hover:border-space-500'
-                                  }`}
-                                title={qm.description}
-                              >
-                                {qm.label}
-                              </button>
-                            ))}
-                          </div>
-                          <p className="text-xs text-space-400">
-                            {QUALITY_MODES.find(q => q.value === qualityMode)?.description} / up to{' '}
-                            {QUALITY_MODE_CONFIGS[qualityMode].maxCandidates} candidates
-                          </p>
-                        </>
-                      )}
-                    </div>
-
-                    {/* Gallery Mode Toggle */}
-                    <div className="space-y-1">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={galleryMode}
-                          onChange={e => setGalleryMode(e.target.checked)}
-                          className="w-4 h-4 accent-cyber-blue"
-                        />
-                        <span className="text-sm text-space-200">Gallery mode</span>
-                      </label>
-                      {galleryMode && (
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-space-400">Variants:</span>
-                          {[2, 4, 6, 8].map(n => (
-                            <button
-                              key={n}
-                              onClick={() => setVariantCount(n)}
-                              className={`px-2 py-1 text-xs rounded ${variantCount === n
-                                ? 'bg-cyber-blue text-white'
-                                : 'bg-space-700 text-space-300 hover:bg-space-600'
-                              }`}
-                            >
-                              {n}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <p className="text-xs text-space-500">
-                        {galleryMode ? `Generate ${variantCount} variants to compare` : 'Generate single map'}
-                      </p>
-                    </div>
-                  </>
+                    )}
+                    <p className="text-xs text-space-500">
+                      {galleryMode ? `Generate ${variantCount} variants to compare` : 'Generate single map'}
+                    </p>
+                  </div>
                 )}
-
                 {/* Loopiness Slider */}
                 <div className="space-y-1">
                   <div className="flex justify-between">
@@ -885,92 +831,6 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               <span className="text-xs">{showLevel2 ? '^' : 'v'}</span>
             </button>
 
-            {/* Tier 3: Advanced corridor settings */}
-            {showLevel2 && (
-              <button
-                onClick={() => setShowAdvanced(!showAdvanced)}
-                className="w-full py-2 px-3 text-sm text-left text-space-400 hover:text-space-200 border border-space-700 rounded hover:border-space-600 transition-colors flex justify-between items-center"
-              >
-                <span>Advanced corridor settings</span>
-                <span className="text-xs">{showAdvanced ? '^' : 'v'}</span>
-              </button>
-            )}
-
-            {/* Advanced Routing Options (Tier 3) */}
-            {showLevel2 && showAdvanced && generatorEngine === 'grid' && !useQualityPipeline && (
-              <div className="p-3 bg-space-800/50 rounded border border-space-700 text-xs text-space-400">
-                Grid engine now uses corridor graph defaults. Legacy routing sliders are hidden because they do not affect this engine.
-              </div>
-            )}
-            {showLevel2 && showAdvanced && (generatorEngine === 'legacy' || useQualityPipeline) && (
-              <div className="space-y-3 p-3 bg-space-800/50 rounded border border-space-700">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={coalesceEnabled}
-                    onChange={e => setCoalesceEnabled(e.target.checked)}
-                    className="w-4 h-4 accent-cyber-blue"
-                  />
-                  <span className="text-sm text-space-200">Merge overlapping corridors</span>
-                </label>
-                <p className="text-xs text-space-500 -mt-2 ml-6">
-                  Encourages shared trunks instead of duplicated parallel lines.
-                </p>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <label className="text-xs text-space-400">Bend penalty</label>
-                    <span className="text-xs text-space-500">{bendPenalty.toFixed(1)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="20"
-                    step="0.5"
-                    value={bendPenalty}
-                    onChange={e => setBendPenalty(parseFloat(e.target.value))}
-                    className="w-full"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <label className="text-xs text-space-400">Reuse bonus</label>
-                    <span className="text-xs text-space-500">{reuseBonus.toFixed(1)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="-10"
-                    max="0"
-                    step="0.5"
-                    value={reuseBonus}
-                    onChange={e => setReuseBonus(parseFloat(e.target.value))}
-                    className="w-full"
-                  />
-                  <div className="flex justify-between text-xs text-space-500">
-                    <span>Discourage reuse</span>
-                    <span>Favor shared trunks</span>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <div className="flex justify-between">
-                    <label className="text-xs text-space-400">Crossing penalty</label>
-                    <span className="text-xs text-space-500">{crossingPenalty.toFixed(1)}</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="50"
-                    step="1"
-                    value={crossingPenalty}
-                    onChange={e => setCrossingPenalty(parseFloat(e.target.value))}
-                    className="w-full"
-                  />
-                </div>
-              </div>
-            )}
-
             {/* Preview info */}
             <div className="p-3 bg-space-800 rounded border border-space-600 text-sm">
               <div className="text-space-400 mb-2">Preview:</div>
@@ -992,36 +852,8 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
               </div>
             )}
 
-            {genState.isGenerating && useQualityPipeline && (
-              <div className="p-3 bg-space-800 border border-space-600 rounded space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-space-300">
-                    {genState.qualityPhase ? `Phase: ${genState.qualityPhase.toUpperCase()}` : 'Generating...'}
-                  </span>
-                  <span className="text-cyber-blue font-mono">
-                    {genState.progress.toFixed(0)}%
-                  </span>
-                </div>
-                <div className="h-2 bg-space-700 rounded overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-cyber-blue to-cyber-pink transition-all duration-300"
-                    style={{ width: `${genState.progress}%` }}
-                  />
-                </div>
-
-                <div className="flex justify-end pt-2">
-                  <button
-                    onClick={handleCancel}
-                    className="px-3 py-1 bg-red-900/50 hover:bg-red-800 text-red-200 text-xs rounded border border-red-800/50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Simple status for non-quality runs */}
-            {genState.isGenerating && !useQualityPipeline && !galleryMode && (
+            {/* Generation progress */}
+            {genState.isGenerating && !galleryMode && (
               <div className="p-3 bg-space-800 border border-cyber-blue/30 rounded space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -1036,7 +868,6 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                     style={{ width: `${Math.max(10, genState.progress)}%` }}
                   />
                 </div>
-                {/* Stage indicators */}
                 <div className="flex justify-between text-xs text-space-500">
                   <span className={genState.progress >= 15 ? 'text-cyber-blue' : ''}>Hull</span>
                   <span className={genState.progress >= 30 ? 'text-cyber-blue' : ''}>Zones</span>
@@ -1045,9 +876,16 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                   <span className={genState.progress >= 85 ? 'text-cyber-blue' : ''}>Doors</span>
                   <span className={genState.progress >= 95 ? 'text-cyber-blue' : ''}>Done</span>
                 </div>
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={handleCancel}
+                    className="px-3 py-1 bg-red-900/50 hover:bg-red-800 text-red-200 text-xs rounded border border-red-800/50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
             )}
-
             {/* Gallery mode progress */}
             {genState.isGenerating && galleryMode && (
               <div className="p-3 bg-space-800 border border-space-600 rounded space-y-2">
@@ -1131,9 +969,7 @@ export function GenerationPanel({ isOpen, onClose }: GenerationPanelProps) {
                         {v.roomCount} rooms, {v.corridorCount} corridors
                       </div>
                       <div className="text-xs text-space-500">
-                        {generatorEngine === 'grid' ? 'Quality' : 'Score'}: {generatorEngine === 'grid'
-                          ? `${(v.score * 100).toFixed(0)}% · Pareto ${v.paretoRank + 1}`
-                          : v.score.toFixed(2)}
+                        Quality: {`${(v.score * 100).toFixed(0)}% · Pareto ${v.paretoRank + 1}`}
                       </div>
                       {v.objectives && (
                         <div className="mt-1 text-[10px] text-space-500">
