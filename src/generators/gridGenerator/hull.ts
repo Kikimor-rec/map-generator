@@ -71,41 +71,30 @@ function carveShipHull(
   rng: SeededRNG
 ): void {
   const centerX = Math.floor(canvas.width / 2)
-  const centerY = Math.floor(canvas.height / 2)
-
-  // Hull dimensions
   const margin = 2
   const maxWidth = Math.floor((canvas.width - margin * 2) / 2)
-  const maxHeight = Math.floor((canvas.height - margin * 2) / 2)
+  const profile = createAsymmetryProfile(rng)
 
-  // Y goes from top (bow) to bottom (stern)
   for (let y = margin; y < canvas.height - margin; y++) {
-    // Normalized Y position (0 = bow, 1 = stern)
     const normalizedY = (y - margin) / (canvas.height - margin * 2 - 1)
-
-    // Calculate hull width at this Y position
-    let widthAtY = calculateShipWidthAtY(
+    const widthAtY = calculateShipWidthAtY(
       normalizedY,
       maxWidth,
       config.bowTaper,
       config.sternTaper,
       config.shape === 'pointed'
     )
+    const row = asymmetricRow(
+      centerX,
+      widthAtY,
+      maxWidth,
+      normalizedY,
+      config.symmetry,
+      profile
+    )
 
-    // Apply asymmetry if needed
-    if (config.symmetry < 1) {
-      const asymmetry = (1 - config.symmetry) * rng.randomFloat(-0.1, 0.1) * maxWidth
-      widthAtY += asymmetry
-    }
-
-    // Clamp width
-    widthAtY = Math.max(1, Math.min(maxWidth, Math.round(widthAtY)))
-
-    // Fill row
-    for (let x = centerX - widthAtY; x <= centerX + widthAtY; x++) {
-      if (isInBounds(canvas, x, y)) {
-        canvas.tiles[y][x] = { type: TileType.HULL }
-      }
+    for (let x = row.left; x <= row.right; x++) {
+      if (isInBounds(canvas, x, y)) canvas.tiles[y][x] = { type: TileType.HULL }
     }
   }
 }
@@ -165,43 +154,36 @@ function carveBoxyHull(
 ): void {
   const centerX = Math.floor(canvas.width / 2)
   const margin = 2
-
   const maxWidth = Math.floor((canvas.width - margin * 2) / 2)
+  const profile = createAsymmetryProfile(rng)
 
   for (let y = margin; y < canvas.height - margin; y++) {
     const normalizedY = (y - margin) / (canvas.height - margin * 2 - 1)
-
-    // Boxy shape: mostly constant width with slight bow/stern taper
-    let widthAtY: number
+    let widthAtY = maxWidth
 
     if (normalizedY < 0.15) {
-      // Bow taper
       const bowNorm = normalizedY / 0.15
-      widthAtY = maxWidth * (0.6 + 0.4 * bowNorm)
+      widthAtY = maxWidth * (1 - config.bowTaper * (1 - bowNorm) * 0.4)
     } else if (normalizedY > 0.85) {
-      // Stern taper
       const sternNorm = (normalizedY - 0.85) / 0.15
-      widthAtY = maxWidth * (1 - 0.3 * sternNorm)
-    } else {
-      // Constant middle section
-      widthAtY = maxWidth
+      widthAtY = maxWidth * (1 - config.sternTaper * sternNorm * 0.5)
     }
 
-    // Small random variation for organic feel
-    if (config.symmetry < 1 && rng.chance(0.1)) {
-      widthAtY += rng.randomInt(-1, 1)
-    }
-
-    widthAtY = Math.max(1, Math.round(widthAtY))
-
-    for (let x = centerX - widthAtY; x <= centerX + widthAtY; x++) {
-      if (isInBounds(canvas, x, y)) {
-        canvas.tiles[y][x] = { type: TileType.HULL }
-      }
+    const row = asymmetricRow(
+      centerX,
+      widthAtY,
+      maxWidth,
+      normalizedY,
+      config.symmetry,
+      profile
+    )
+    for (let x = row.left; x <= row.right; x++) {
+      if (isInBounds(canvas, x, y)) canvas.tiles[y][x] = { type: TileType.HULL }
     }
   }
 }
 
+// ============================================================================
 // ============================================================================
 // ANGULAR HULL (MILITARY)
 // ============================================================================
@@ -218,6 +200,7 @@ function carveAngularHull(
   const margin = 2
 
   const maxWidth = Math.floor((canvas.width - margin * 2) / 2)
+  const profile = createAsymmetryProfile(rng)
 
   // Define angular segments
   const segments = [
@@ -241,12 +224,16 @@ function carveAngularHull(
       }
     }
 
-    widthAtY = Math.max(1, Math.round(widthAtY))
-
-    for (let x = centerX - widthAtY; x <= centerX + widthAtY; x++) {
-      if (isInBounds(canvas, x, y)) {
-        canvas.tiles[y][x] = { type: TileType.HULL }
-      }
+    const row = asymmetricRow(
+      centerX,
+      widthAtY,
+      maxWidth,
+      normalizedY,
+      config.symmetry,
+      profile
+    )
+    for (let x = row.left; x <= row.right; x++) {
+      if (isInBounds(canvas, x, y)) canvas.tiles[y][x] = { type: TileType.HULL }
     }
   }
 }
@@ -261,14 +248,32 @@ function carveAngularHull(
 function carveCircularHull(
   canvas: GridCanvas,
   config: HullConfig,
-  _rng: SeededRNG
+  rng: SeededRNG
 ): void {
   const center = getCanvasCenter(canvas)
   const radius = Math.min(canvas.width, canvas.height) / 2 - 2
+  const asymmetry = Math.max(0, 1 - config.symmetry)
+  const phaseA = rng.randomFloat(0, Math.PI * 2)
+  const phaseB = rng.randomFloat(0, Math.PI * 2)
 
-  fillCircle(canvas, center.x, center.y, radius, TileType.HULL)
+  for (let y = 0; y < canvas.height; y++) {
+    for (let x = 0; x < canvas.width; x++) {
+      const dx = x - center.x
+      const dy = y - center.y
+      const angle = Math.atan2(dy, dx)
+      const localRadius = radius * (
+        1 +
+        Math.sin(angle + phaseA) * asymmetry * 0.38 +
+        Math.sin(angle * 3 + phaseB) * asymmetry * 0.22
+      )
+      if (Math.hypot(dx, dy) <= localRadius) {
+        canvas.tiles[y][x] = { type: TileType.HULL }
+      }
+    }
+  }
 }
 
+// ============================================================================
 // ============================================================================
 // RING HULL (STATION RING)
 // ============================================================================
@@ -516,6 +521,52 @@ function carveClusterLink(
   return centerline
 }
 
+interface AsymmetryProfile {
+  centerPhase: number
+  sidePhase: number
+  centerAmplitude: number
+  sideAmplitude: number
+}
+
+function createAsymmetryProfile(rng: SeededRNG): AsymmetryProfile {
+  return {
+    centerPhase: rng.randomFloat(0, Math.PI * 2),
+    sidePhase: rng.randomFloat(0, Math.PI * 2),
+    centerAmplitude: rng.randomFloat(0.55, 1),
+    sideAmplitude: rng.randomFloat(0.7, 1),
+  }
+}
+
+function asymmetricRow(
+  centerX: number,
+  baseWidth: number,
+  maxWidth: number,
+  normalizedY: number,
+  symmetry: number,
+  profile: AsymmetryProfile
+): { left: number; right: number } {
+  const strength = Math.max(0, Math.min(1, 1 - symmetry))
+  const centerDrift = Math.round(
+    Math.sin(normalizedY * Math.PI * 2 + profile.centerPhase) *
+    maxWidth *
+    strength *
+    0.7 *
+    profile.centerAmplitude
+  )
+  const sideBias =
+    Math.sin(normalizedY * Math.PI * 3 + profile.sidePhase) *
+    maxWidth *
+    strength *
+    0.95 *
+    profile.sideAmplitude
+  const leftWidth = Math.max(1, Math.round(baseWidth - sideBias))
+  const rightWidth = Math.max(1, Math.round(baseWidth + sideBias))
+  return {
+    left: centerX + centerDrift - leftWidth,
+    right: centerX + centerDrift + rightWidth,
+  }
+}
+
 // ============================================================================
 // HULL TEMPLATES
 // ============================================================================
@@ -537,16 +588,19 @@ export function getDefaultHullConfig(
           aspectRatio: 0.35,
           bowTaper: 0.9,
           sternTaper: 0.3,
-          symmetry: 0.95,
+          symmetry: 0.86,
         }
       case 'cargo':
       case 'salvage':
+      case 'freighter':
+      case 'mining':
+      case 'colonizer':
         return {
           shape: 'boxy',
           aspectRatio: 0.5,
           bowTaper: 0.3,
           sternTaper: 0.2,
-          symmetry: 0.85,
+          symmetry: 0.68,
         }
       case 'military':
         return {
@@ -554,7 +608,7 @@ export function getDefaultHullConfig(
           aspectRatio: 0.4,
           bowTaper: 0.7,
           sternTaper: 0.4,
-          symmetry: 1.0,
+          symmetry: 0.92,
         }
       default:
         return {
@@ -562,7 +616,7 @@ export function getDefaultHullConfig(
           aspectRatio: 0.4,
           bowTaper: 0.6,
           sternTaper: 0.3,
-          symmetry: 0.9,
+          symmetry: 0.78,
         }
     }
   }
@@ -584,7 +638,7 @@ export function getDefaultHullConfig(
           aspectRatio: 1.0,
           bowTaper: 0,
           sternTaper: 0,
-          symmetry: 0.95,
+          symmetry: 0.82,
         }
     }
   }

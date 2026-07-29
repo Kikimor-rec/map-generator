@@ -171,6 +171,36 @@ describe('active occupancy generator archetype hulls', () => {
     expect(widths[widths.length - 1]).toBeLessThan(Math.max(...widths))
   })
 
+  it('creates deterministic bounded bilateral asymmetry for cargo ships and circular stations', () => {
+    for (const [archetype, subtype] of [
+      ['ship', 'cargo'],
+      ['station', 'research'],
+    ] as const) {
+      const canvas = createCanvas(archetype, 'md')
+      carveHull(canvas, getDefaultHullConfig(archetype, subtype), createRNG('asymmetric-hull'))
+      let mismatch = 0
+      let occupied = 0
+      for (let y = 0; y < canvas.height; y += 1) {
+        for (let x = 0; x < canvas.width; x += 1) {
+          const mirrorX = canvas.width - 1 - x
+          const isOccupied = canvas.tiles[y][x].type !== TileType.VOID
+          const mirrorOccupied = canvas.tiles[y][mirrorX].type !== TileType.VOID
+          if (isOccupied) occupied += 1
+          if (isOccupied !== mirrorOccupied) mismatch += 1
+        }
+      }
+      expect(mismatch, `${archetype} stayed perfectly mirrored`).toBeGreaterThan(0)
+      expect(mismatch).toBeLessThan(occupied * 0.5)
+    }
+  })
+
+  it('keeps cargo ships blunt instead of forcing every bow into a point', () => {
+    const canvas = createCanvas('ship', 'md')
+    carveHull(canvas, getDefaultHullConfig('ship', 'freighter'), createRNG('blunt-cargo'))
+    const widths = occupiedRowWidths(canvas).filter(width => width > 0)
+    expect(widths[0]).toBeGreaterThan(Math.max(...widths) * 0.7)
+  })
+
   it('preserves enclosed negative space in a habitat ring station', () => {
     const result = generateGridMap({
       seed: SEED,

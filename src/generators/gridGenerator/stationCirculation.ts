@@ -127,8 +127,8 @@ function findValidRing(
 
 /**
  * Rasterize a regular octagon as a one-tile, four-connected closed ring.
- * Every diagonal octagon edge is converted to deterministic Manhattan steps
- * selected by radial error.
+ * Every diagonal octagon edge uses one deterministic radial elbow, keeping
+ * the exact H/V tactical path while avoiding a bend on every grid cell.
  */
 function rasterizeOrthogonalRing(center: Point, radius: number): Point[] {
   const diagonal = Math.max(1, Math.round(radius / Math.SQRT2))
@@ -167,23 +167,29 @@ function appendOrthogonalLeg(
   center: Point,
   preferredRadius: number
 ): void {
+  const elbowCandidates = [
+    { x: end.x, y: start.y },
+    { x: start.x, y: end.y },
+  ]
+  const elbow = elbowCandidates.sort((left, right) => {
+    const leftError = Math.abs(Math.hypot(left.x - center.x, left.y - center.y) - preferredRadius)
+    const rightError = Math.abs(Math.hypot(right.x - center.x, right.y - center.y) - preferredRadius)
+    return leftError - rightError || left.y - right.y || left.x - right.x
+  })[0]
+
+  appendAxisAlignedTiles(output, output[output.length - 1], elbow)
+  appendAxisAlignedTiles(output, output[output.length - 1], end)
+}
+
+function appendAxisAlignedTiles(output: Point[], start: Point, end: Point): void {
   let current = start
   while (!samePoint(current, end)) {
-    const candidates: Point[] = []
-    if (current.x !== end.x) {
-      candidates.push({ x: current.x + Math.sign(end.x - current.x), y: current.y })
+    current = {
+      x: current.x === end.x ? current.x : current.x + Math.sign(end.x - current.x),
+      y: current.x === end.x && current.y !== end.y
+        ? current.y + Math.sign(end.y - current.y)
+        : current.y,
     }
-    if (current.y !== end.y) {
-      candidates.push({ x: current.x, y: current.y + Math.sign(end.y - current.y) })
-    }
-
-    candidates.sort((a, b) => {
-      const aError = Math.abs(Math.hypot(a.x - center.x, a.y - center.y) - preferredRadius)
-      const bError = Math.abs(Math.hypot(b.x - center.x, b.y - center.y) - preferredRadius)
-      return aError - bError || a.y - b.y || a.x - b.x
-    })
-
-    current = candidates[0]
     output.push(current)
   }
 }

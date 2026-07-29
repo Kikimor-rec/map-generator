@@ -124,3 +124,17 @@ Current limits:
   and editor bridge materialize the semantic `doorType`, not every access field;
 * service hatches, vent/cable layers, powered locks, and runtime door-state
   simulation remain future work.
+
+
+## 6.9 Physical topology and presentation cleanup
+
+- Physical graph nodes are created only for real endpoints and degree 3+
+  branches/crossings. A bend or a tile shared by several logical connector ids
+  is not a junction by itself.
+- Consecutive bend-only tiles are exported as one continuous physical edge.
+  This removes round-cap piles and overlapping outlines at every grid step.
+- Station ring diagonals are rasterized with one deterministic radial elbow per
+  octagon leg instead of alternating direction at every cell. Serialized,
+  rendered, hit-test, and selection geometry therefore remain the same exact H/V path.
+- Door glyphs must visibly interrupt the room/corridor boundary with a clearance
+  halo, bright frame, end caps, and semantic type marker.

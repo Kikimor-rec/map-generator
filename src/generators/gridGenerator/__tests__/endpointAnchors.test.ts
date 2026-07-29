@@ -104,7 +104,7 @@ describe('generated corridor endpoint anchors', () => {
       roomId: 'room-a',
       portId: 'port-room-a-0',
       doorId: 'door-port-room-a-0',
-      position: { x: 140, y: 140 },
+      position: { x: 120, y: 140 },
     })
     expect(anchors(roomFacing!).some(anchor => anchor.kind === 'junction')).toBe(true)
 

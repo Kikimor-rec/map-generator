@@ -3,7 +3,10 @@ import type { DeckGeometry } from '@core/types'
 import { GEOMETRY_UNITS_PER_CELL } from '../../../domain/geometryUnits'
 import { convertToEditorFormat } from '../../../generators/generator'
 import { generateGridMap } from '../../../generators/gridGenerator'
-import { buildDeckGeometryRenderPaths } from '../deckGeometry'
+import {
+  buildBlueprintSectionLines,
+  buildDeckGeometryRenderPaths,
+} from '../deckGeometry'
 
 const square = (left: number, top: number, right: number, bottom: number) => ({
   polygons: [{
@@ -72,6 +75,22 @@ describe('buildDeckGeometryRenderPaths', () => {
       { x: 96, y: 96 },
       { x: 64, y: 96 },
     ])
+  })
+
+  it('builds clipped blueprint section guides at the large-grid cadence', () => {
+    const paths = buildDeckGeometryRenderPaths({
+      unitsPerCell: GEOMETRY_UNITS_PER_CELL,
+      facilityEnvelope: square(0, 0, GEOMETRY_UNITS_PER_CELL * 10, GEOMETRY_UNITS_PER_CELL * 6),
+      structuralVoids: [],
+    }, 40)
+
+    const lines = buildBlueprintSectionLines(paths, 40)
+
+    expect(lines).toEqual(expect.arrayContaining([
+      { start: { x: 160, y: 0 }, end: { x: 160, y: 240 }, major: true },
+      { start: { x: 0, y: 160 }, end: { x: 400, y: 160 }, major: true },
+    ]))
+    expect(lines.some(line => line.major)).toBe(true)
   })
 
   it('rejects invalid display scale without throwing', () => {

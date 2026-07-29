@@ -120,10 +120,11 @@ function convertPlacementToLayoutRoom(
       ? doorSemantic
       : undefined
 
+    const position = projectDoorTileToRoomWall(door, placement, tileSize)
     return {
       id: `port-${placement.roomId}-${idx}`,
-      x: door.x * tileSize + tileSize / 2,
-      y: door.y * tileSize + tileSize / 2,
+      x: position.x,
+      y: position.y,
       wall,
       connectorId: `corridor-${door.x}-${door.y}`,
       doorType,
@@ -154,6 +155,22 @@ function convertPlacementToLayoutRoom(
 /**
  * Determine which wall a door is on
  */
+export function projectDoorTileToRoomWall(
+  door: Point,
+  placement: RoomPlacement,
+  tileSize: number
+): Point {
+  const wall = determineDoorWall(door, placement)
+  const centerX = door.x * tileSize + tileSize / 2
+  const centerY = door.y * tileSize + tileSize / 2
+  switch (wall) {
+    case 'top': return { x: centerX, y: placement.bounds.y * tileSize }
+    case 'bottom': return { x: centerX, y: (placement.bounds.y + placement.bounds.height) * tileSize }
+    case 'left': return { x: placement.bounds.x * tileSize, y: centerY }
+    case 'right': return { x: (placement.bounds.x + placement.bounds.width) * tileSize, y: centerY }
+  }
+}
+
 function determineDoorWall(
   door: Point,
   placement: RoomPlacement
@@ -202,12 +219,15 @@ function extractCorridors(canvas: GridCanvas, placements: RoomPlacement[]): Layo
       const endAnchor = resolveExactGraphEndpointAnchor(
         edge.toNodeId, edge.path[edge.path.length - 1], nodesById, junctionsByNodeId, portsByTile, canvas.tileSize
       )
+      const path = simplifyGridPath(edge.path).map(p => gridPointToWorld(p, canvas.tileSize))
+      if (startAnchor.kind === 'roomPort') path[0] = { ...startAnchor.position }
+      if (endAnchor.kind === 'roomPort') path[path.length - 1] = { ...endAnchor.position }
       return {
         id: `corridor-edge-${idx}`,
         fromRoomId: endpoints.fromRoomId,
         toRoomId: endpoints.toRoomId,
         kind: 'corridor',
-        path: simplifyGridPath(edge.path).map(p => gridPointToWorld(p, canvas.tileSize)),
+        path,
         width: canvas.tileSize,
         widthClass: edge.connectorIds.length > 1 ? 'wide' : 'standard',
         startAnchor,
@@ -237,7 +257,7 @@ function buildExactRoomPortIndex(
         roomId: placement.roomId,
         portId,
         doorId: `door-${portId}`,
-        position: gridPointToWorld(door, canvas.tileSize),
+        position: projectDoorTileToRoomWall(door, placement, canvas.tileSize),
       }
 
       // Door tiles are not part of the physical corridor graph. Associate the

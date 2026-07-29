@@ -130,6 +130,41 @@ describe('active occupancy door semantics', () => {
     }
   })
 
+  it('projects serialized doors, anchors, and corridor endpoints onto room walls', () => {
+    const result = generateGridMap({
+      seed: 'door-wall-projection',
+      archetype: 'station',
+      subtype: 'habitat',
+      sizeTier: 'md',
+    })
+    expect(result.success, result.error).toBe(true)
+    const deck = result.map!.decks[0]
+
+    for (const room of deck.rooms) {
+      for (const port of room.ports) {
+        const onWall =
+          Math.abs(port.x - room.x) < 0.01 ||
+          Math.abs(port.x - (room.x + room.width)) < 0.01 ||
+          Math.abs(port.y - room.y) < 0.01 ||
+          Math.abs(port.y - (room.y + room.height)) < 0.01
+        expect(onWall, `${room.id}/${port.id} is not on a wall`).toBe(true)
+      }
+    }
+
+    for (const connector of deck.connectors) {
+      for (const endpoint of [
+        { anchor: connector.startAnchor, point: connector.path[0] },
+        { anchor: connector.endAnchor, point: connector.path[connector.path.length - 1] },
+      ]) {
+        if (endpoint.anchor?.kind !== 'roomPort') continue
+        const room = deck.rooms.find(candidate => candidate.id === endpoint.anchor!.roomId)!
+        const port = room.ports.find(candidate => candidate.id === endpoint.anchor!.portId)!
+        expect(endpoint.anchor.position).toEqual({ x: port.x, y: port.y })
+        expect(endpoint.point).toEqual(endpoint.anchor.position)
+      }
+    }
+  })
+
   it('materializes grid port semantics as visible editor room doors without endpoint duplicates', () => {
     const result = generateGridMap({
       seed: 'door-editor-adapter',

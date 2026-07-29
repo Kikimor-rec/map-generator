@@ -16,7 +16,11 @@ import {
   type EndpointSnapCandidate,
 } from '@core/editorInteractions'
 import { beginRightMousePan, idleRightMousePan, updateRightMousePan } from './rightMousePan'
-import { buildDeckGeometryRenderPaths, type RenderPolygon } from './deckGeometry'
+import {
+  buildBlueprintSectionLines,
+  buildDeckGeometryRenderPaths,
+  type RenderPolygon,
+} from './deckGeometry'
 
 // Helper to convert hex string to number
 function hexToNumber(hex: string): number {
@@ -632,32 +636,61 @@ export function MapCanvas() {
     const paths = buildDeckGeometryRenderPaths(activeDeck?.geometry, gridSize)
     if (paths.envelope.length === 0) return
 
-    const graphics = new Graphics()
     const wallColor = hexToNumber(activeTheme.wallColor)
     const backgroundColor = hexToNumber(activeTheme.backgroundColor)
     const accentColor = hexToNumber(activeTheme.accentColor)
+    const isLightTheme = activeTheme.backgroundColor === '#ffffff'
+    const hullFieldColor = isLightTheme ? 0xe9eef2 : 0x0b2235
+    const shadowColor = isLightTheme ? 0x64748b : 0x000000
 
-    graphics.lineStyle(0)
-    graphics.beginFill(wallColor, 0.09)
-    for (const polygon of paths.envelope) {
-      drawRenderPolygon(graphics, polygon)
+    const shadow = new Graphics()
+    shadow.position.set(7, 9)
+    shadow.beginFill(shadowColor, isLightTheme ? 0.16 : 0.48)
+    for (const polygon of paths.envelope) drawRenderPolygon(shadow, polygon)
+    shadow.endFill()
+
+    const hullField = new Graphics()
+    hullField.beginFill(hullFieldColor, isLightTheme ? 0.68 : 0.86)
+    for (const polygon of paths.envelope) drawRenderPolygon(hullField, polygon)
+    hullField.endFill()
+
+    const envelopeMask = new Graphics()
+    envelopeMask.beginFill(0xffffff)
+    for (const polygon of paths.envelope) drawRenderPolygon(envelopeMask, polygon)
+    envelopeMask.endFill()
+
+    const sectionLines = new Graphics()
+    for (const line of buildBlueprintSectionLines(paths, gridSize)) {
+      sectionLines.lineStyle(
+        line.major ? 2 : 1,
+        line.major ? accentColor : wallColor,
+        line.major ? 0.22 : 0.11
+      )
+      sectionLines.moveTo(line.start.x, line.start.y)
+      sectionLines.lineTo(line.end.x, line.end.y)
     }
-    graphics.endFill()
+    sectionLines.mask = envelopeMask
 
-    graphics.lineStyle(4, wallColor, 0.9)
-    for (const polygon of paths.envelope) {
-      strokeRenderPolygon(graphics, polygon)
-    }
+    const outline = new Graphics()
+    outline.lineStyle(12, backgroundColor, isLightTheme ? 0.55 : 0.92)
+    for (const polygon of paths.envelope) strokeRenderPolygon(outline, polygon)
+    outline.lineStyle(6, wallColor, 0.96)
+    for (const polygon of paths.envelope) strokeRenderPolygon(outline, polygon)
+    outline.lineStyle(1.5, accentColor, 0.86)
+    for (const polygon of paths.envelope) strokeRenderPolygon(outline, polygon)
 
+    const voids = new Graphics()
     for (const structuralVoid of paths.structuralVoids) {
-      graphics.lineStyle(2, accentColor, 0.65)
-      graphics.beginFill(backgroundColor, 0.92)
-      drawRenderPolygon(graphics, structuralVoid)
-      graphics.endFill()
-      strokeRenderPolygon(graphics, structuralVoid)
+      voids.lineStyle(5, backgroundColor, 0.9)
+      voids.beginFill(backgroundColor, 0.98)
+      drawRenderPolygon(voids, structuralVoid)
+      voids.endFill()
+      strokeRenderPolygon(voids, structuralVoid)
+      voids.lineStyle(1.5, accentColor, 0.78)
+      strokeRenderPolygon(voids, structuralVoid)
     }
 
-    container.addChild(graphics)
+    container.addChild(shadow, hullField, sectionLines, outline, voids, envelopeMask)
   }, [activeDeck?.geometry, activeTheme, gridSize, isReady])
 
   // Draw rooms
@@ -711,103 +744,94 @@ export function MapCanvas() {
         )
       }
       
-      // Draw doors
+      container.addChild(graphics)
+
+      // Draw doors as explicit wall thresholds above both room and corridor.
       for (const door of room.doors) {
         const doorGraphics = new Graphics()
-        const doorWidth = door.width || gridSize
-        const doorThickness = 8
-        
-        // Door colors based on type
+        const doorWidth = Math.min(Math.max(door.width || gridSize * 0.72, 18), gridSize * 0.92)
+        const doorThickness = Math.max(9, Math.min(12, gridSize * 0.26))
+        const clearanceColor = activeTheme.backgroundColor === '#ffffff' ? 0xf8fafc : 0x06121f
+
         const doorColors: Record<DoorType, { fill: number; stroke: number }> = {
-          [DoorType.Standard]: { fill: 0x666666, stroke: 0x888888 },
-          [DoorType.Blast]: { fill: 0xcc4400, stroke: 0xff6600 },
-          [DoorType.Airlock]: { fill: 0x0088cc, stroke: 0x00aaff },
-          [DoorType.Emergency]: { fill: 0xcc0000, stroke: 0xff0000 },
-          [DoorType.Hidden]: { fill: 0x333333, stroke: 0x444444 },
-          [DoorType.Secure]: { fill: 0xcc8800, stroke: 0xffaa00 },
+          [DoorType.Standard]: { fill: 0x173448, stroke: 0xd8f3ff },
+          [DoorType.Blast]: { fill: 0x8f2d0d, stroke: 0xff8a4c },
+          [DoorType.Airlock]: { fill: 0x075985, stroke: 0x67e8f9 },
+          [DoorType.Emergency]: { fill: 0x991b1b, stroke: 0xfca5a5 },
+          [DoorType.Hidden]: { fill: 0x263341, stroke: 0x64748b },
+          [DoorType.Secure]: { fill: 0x854d0e, stroke: 0xfde68a },
         }
-        
         const colors = doorColors[door.type] || doorColors[DoorType.Standard]
-        
-        // Draw door frame
-        doorGraphics.lineStyle(2, colors.stroke, 1)
-        doorGraphics.beginFill(colors.fill)
-        
-        if (door.rotation === 0) {
-          // Horizontal door (top/bottom wall)
-          // Main door body
-          doorGraphics.drawRoundedRect(
-            door.position.x - doorWidth / 2, 
-            door.position.y - doorThickness / 2, 
-            doorWidth, 
-            doorThickness, 
-            2
-          )
-          
-          // Door panels (sliding effect)
-          doorGraphics.lineStyle(1, colors.stroke, 0.7)
-          doorGraphics.moveTo(door.position.x - doorWidth / 4, door.position.y - doorThickness / 2)
-          doorGraphics.lineTo(door.position.x - doorWidth / 4, door.position.y + doorThickness / 2)
-          doorGraphics.moveTo(door.position.x + doorWidth / 4, door.position.y - doorThickness / 2)
-          doorGraphics.lineTo(door.position.x + doorWidth / 4, door.position.y + doorThickness / 2)
-        } else {
-          // Vertical door (left/right wall)
-          doorGraphics.drawRoundedRect(
-            door.position.x - doorThickness / 2, 
-            door.position.y - doorWidth / 2, 
-            doorThickness, 
-            doorWidth, 
-            2
-          )
-          
-          // Door panels
-          doorGraphics.lineStyle(1, colors.stroke, 0.7)
-          doorGraphics.moveTo(door.position.x - doorThickness / 2, door.position.y - doorWidth / 4)
-          doorGraphics.lineTo(door.position.x + doorThickness / 2, door.position.y - doorWidth / 4)
-          doorGraphics.moveTo(door.position.x - doorThickness / 2, door.position.y + doorWidth / 4)
-          doorGraphics.lineTo(door.position.x + doorThickness / 2, door.position.y + doorWidth / 4)
-        }
+        const isHorizontal = door.rotation === 0
+        const body = isHorizontal
+          ? {
+              x: door.position.x - doorWidth / 2,
+              y: door.position.y - doorThickness / 2,
+              width: doorWidth,
+              height: doorThickness,
+            }
+          : {
+              x: door.position.x - doorThickness / 2,
+              y: door.position.y - doorWidth / 2,
+              width: doorThickness,
+              height: doorWidth,
+            }
+
+        // Clearance halo erases the ambiguous continuous room/corridor edge.
+        doorGraphics.beginFill(clearanceColor, 0.98)
+        doorGraphics.drawRoundedRect(
+          body.x - 4,
+          body.y - 4,
+          body.width + 8,
+          body.height + 8,
+          3
+        )
         doorGraphics.endFill()
-        
-        // Door type indicator icon
+
+        doorGraphics.lineStyle(2.5, colors.stroke, 1)
+        doorGraphics.beginFill(colors.fill, 0.98)
+        doorGraphics.drawRoundedRect(body.x, body.y, body.width, body.height, 2)
+        doorGraphics.endFill()
+
+        // Frame end caps and a central sliding-door split remain legible at fit.
+        doorGraphics.lineStyle(2, colors.stroke, 0.95)
+        if (isHorizontal) {
+          doorGraphics.moveTo(body.x, body.y - 3)
+          doorGraphics.lineTo(body.x, body.y + body.height + 3)
+          doorGraphics.moveTo(body.x + body.width, body.y - 3)
+          doorGraphics.lineTo(body.x + body.width, body.y + body.height + 3)
+          doorGraphics.moveTo(door.position.x, body.y)
+          doorGraphics.lineTo(door.position.x, body.y + body.height)
+        } else {
+          doorGraphics.moveTo(body.x - 3, body.y)
+          doorGraphics.lineTo(body.x + body.width + 3, body.y)
+          doorGraphics.moveTo(body.x - 3, body.y + body.height)
+          doorGraphics.lineTo(body.x + body.width + 3, body.y + body.height)
+          doorGraphics.moveTo(body.x, door.position.y)
+          doorGraphics.lineTo(body.x + body.width, door.position.y)
+        }
+
         if (door.type === DoorType.Airlock) {
-          // Double circle for airlock
-          doorGraphics.lineStyle(1, 0xffffff, 0.8)
+          doorGraphics.lineStyle(1.5, 0xffffff, 0.9)
           doorGraphics.drawCircle(door.position.x, door.position.y, 3)
-          doorGraphics.drawCircle(door.position.x, door.position.y, 5)
-        } else if (door.type === DoorType.Emergency) {
-          // Exclamation mark for emergency
-          doorGraphics.lineStyle(2, 0xffffff, 0.9)
-          doorGraphics.moveTo(door.position.x, door.position.y - 3)
-          doorGraphics.lineTo(door.position.x, door.position.y + 1)
-          doorGraphics.beginFill(0xffffff)
-          doorGraphics.drawCircle(door.position.x, door.position.y + 3, 1)
-          doorGraphics.endFill()
-        } else if (door.type === DoorType.Secure) {
-          // Lock icon for secure
-          doorGraphics.lineStyle(1, 0xffffff, 0.8)
-          doorGraphics.drawRect(door.position.x - 2, door.position.y, 4, 3)
-          doorGraphics.drawCircle(door.position.x, door.position.y - 1, 2)
+          doorGraphics.drawCircle(door.position.x, door.position.y, 6)
         } else if (door.type === DoorType.Blast) {
-          // X for blast door
-          doorGraphics.lineStyle(1, 0xffffff, 0.8)
-          doorGraphics.moveTo(door.position.x - 2, door.position.y - 2)
-          doorGraphics.lineTo(door.position.x + 2, door.position.y + 2)
-          doorGraphics.moveTo(door.position.x + 2, door.position.y - 2)
-          doorGraphics.lineTo(door.position.x - 2, door.position.y + 2)
+          doorGraphics.lineStyle(1.5, 0xffffff, 0.9)
+          doorGraphics.moveTo(door.position.x - 3, door.position.y - 3)
+          doorGraphics.lineTo(door.position.x + 3, door.position.y + 3)
+          doorGraphics.moveTo(door.position.x + 3, door.position.y - 3)
+          doorGraphics.lineTo(door.position.x - 3, door.position.y + 3)
+        } else if (door.type === DoorType.Secure) {
+          doorGraphics.lineStyle(1.5, 0xffffff, 0.9)
+          doorGraphics.drawRect(door.position.x - 2.5, door.position.y, 5, 3.5)
+          doorGraphics.drawCircle(door.position.x, door.position.y - 1, 2.5)
         }
-        
-        // Door status indicator
-        if (door.isLocked) {
-          doorGraphics.lineStyle(2, 0xff0000)
-          doorGraphics.drawCircle(door.position.x, door.position.y, 6)
+
+        if (door.isLocked || door.isOpen) {
+          doorGraphics.lineStyle(2, door.isLocked ? 0xff4d4d : 0x34d399, 1)
+          doorGraphics.drawCircle(door.position.x, door.position.y, 7)
         }
-        
-        if (door.isOpen) {
-          doorGraphics.lineStyle(2, 0x00ff00)
-          doorGraphics.drawCircle(door.position.x, door.position.y, 6)
-        }
-        
+
         container.addChild(doorGraphics)
       }
 
@@ -827,7 +851,6 @@ export function MapCanvas() {
       label.x = room.bounds.x + room.bounds.width / 2 - label.width / 2
       label.y = room.bounds.y + room.bounds.height / 2 - label.height / 2
 
-      container.addChild(graphics)
       container.addChild(label)
 
       // Make room interactive - PixiJS 7.x API

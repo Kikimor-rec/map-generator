@@ -88,16 +88,15 @@ export function buildCorridorGraph(canvas: GridCanvas): CorridorGraph {
   for (const key of corridorKeys) {
     const point = pointFromKey(key)
     const neighborCount = corridorNeighborCount(canvas, point)
-    const connectorIds = getTileConnectorIds(getTile(canvas, point.x, point.y))
-    const isBend = neighborCount === 2 && !hasOppositeCorridorNeighbors(canvas, point)
-    const isNode = neighborCount !== 2 || isBend || connectorIds.length > 1
+    const isNode = neighborCount !== 2 || hasConnectorMembershipBoundary(canvas, point)
 
     if (!isNode) continue
 
     const kind: CorridorGraphNode['kind'] =
-      neighborCount >= 3 || connectorIds.length > 1 ? 'junction' :
+      neighborCount >= 3 ? 'junction' :
       neighborCount <= 1 ? 'endpoint' :
       'bend'
+    const connectorIds = getTileConnectorIds(getTile(canvas, point.x, point.y))
 
     const node: CorridorGraphNode = {
       id: `node-${point.x}-${point.y}`,
@@ -109,6 +108,47 @@ export function buildCorridorGraph(canvas: GridCanvas): CorridorGraph {
     }
     nodes.push(node)
     nodeByKey.set(key, node)
+  }
+
+  // A closed loop has degree two at every tile. Give each such component one
+  // deterministic anchor so it can be exported as a single physical edge
+  // instead of manufacturing a node at every bend.
+  const visitedComponentKeys = new Set<string>()
+  for (const startKey of corridorKeys) {
+    if (visitedComponentKeys.has(startKey)) continue
+
+    const componentKeys: string[] = []
+    const queue = [startKey]
+    visitedComponentKeys.add(startKey)
+
+    while (queue.length > 0) {
+      const currentKey = queue.shift()!
+      componentKeys.push(currentKey)
+      const current = pointFromKey(currentKey)
+      for (const direction of DIRECTIONS_4) {
+        const neighborKey = keyOf({
+          x: current.x + direction.x,
+          y: current.y + direction.y,
+        })
+        if (!corridorKeys.has(neighborKey) || visitedComponentKeys.has(neighborKey)) continue
+        visitedComponentKeys.add(neighborKey)
+        queue.push(neighborKey)
+      }
+    }
+
+    if (componentKeys.some(key => nodeByKey.has(key))) continue
+    const anchorKey = componentKeys.sort(comparePointKeys)[0]
+    const anchor = pointFromKey(anchorKey)
+    const node: CorridorGraphNode = {
+      id: `node-${anchor.x}-${anchor.y}`,
+      x: anchor.x,
+      y: anchor.y,
+      degree: 2,
+      kind: 'bend',
+      connectorIds: getTileConnectorIds(getTile(canvas, anchor.x, anchor.y)),
+    }
+    nodes.push(node)
+    nodeByKey.set(anchorKey, node)
   }
 
   const edges: CorridorGraphEdge[] = []
@@ -126,22 +166,24 @@ export function buildCorridorGraph(canvas: GridCanvas): CorridorGraph {
       const path: Point[] = [start]
       let previous = start
       let current = next
-      let connectorIds = new Set(node.connectorIds)
+      let connectorIds = [...node.connectorIds].sort()
 
       while (true) {
         path.push(current)
         visitedSegments.add(edgeVisitKey(previous, current))
-        getTileConnectorIds(getTile(canvas, current.x, current.y)).forEach(id => connectorIds.add(id))
+        connectorIds = intersectConnectorIds(
+          connectorIds,
+          getTileConnectorIds(getTile(canvas, current.x, current.y))
+        )
 
         const currentNode = nodeByKey.get(keyOf(current))
-        if (currentNode && currentNode.id !== node.id) {
-          currentNode.connectorIds.forEach(id => connectorIds.add(id))
+        if (currentNode && (currentNode.id !== node.id || path.length > 2)) {
           edges.push({
             id: `edge-${edges.length}`,
             fromNodeId: node.id,
             toNodeId: currentNode.id,
             path,
-            connectorIds: Array.from(connectorIds),
+            connectorIds,
           })
           break
         }
@@ -180,12 +222,28 @@ export function corridorNeighborCount(canvas: GridCanvas, point: Point): number 
   return DIRECTIONS_4.filter(dir => isCorridorLike(getTile(canvas, point.x + dir.x, point.y + dir.y))).length
 }
 
-function hasOppositeCorridorNeighbors(canvas: GridCanvas, point: Point): boolean {
-  const up = isCorridorLike(getTile(canvas, point.x, point.y - 1))
-  const down = isCorridorLike(getTile(canvas, point.x, point.y + 1))
-  const left = isCorridorLike(getTile(canvas, point.x - 1, point.y))
-  const right = isCorridorLike(getTile(canvas, point.x + 1, point.y))
-  return (up && down) || (left && right)
+function hasConnectorMembershipBoundary(canvas: GridCanvas, point: Point): boolean {
+  const currentMembership = connectorMembershipKey(getTile(canvas, point.x, point.y))
+  const currentPointKey = keyOf(point)
+
+  return DIRECTIONS_4.some(direction => {
+    const neighbor = { x: point.x + direction.x, y: point.y + direction.y }
+    const neighborTile = getTile(canvas, neighbor.x, neighbor.y)
+    if (!isCorridorLike(neighborTile) || corridorNeighborCount(canvas, neighbor) !== 2) return false
+    if (connectorMembershipKey(neighborTile) === currentMembership) return false
+
+    // Exactly one side of a straight membership transition becomes a node.
+    return comparePointKeys(currentPointKey, keyOf(neighbor)) < 0
+  })
+}
+
+function connectorMembershipKey(tile: Tile | undefined): string {
+  return getTileConnectorIds(tile).sort().join('|')
+}
+
+function intersectConnectorIds(left: string[], right: string[]): string[] {
+  const rightIds = new Set(right)
+  return left.filter(id => rightIds.has(id)).sort()
 }
 
 function keyOf(point: Point): string {
@@ -195,6 +253,12 @@ function keyOf(point: Point): string {
 function pointFromKey(key: string): Point {
   const [x, y] = key.split(',').map(Number)
   return { x, y }
+}
+
+function comparePointKeys(leftKey: string, rightKey: string): number {
+  const left = pointFromKey(leftKey)
+  const right = pointFromKey(rightKey)
+  return left.y - right.y || left.x - right.x
 }
 
 function edgeVisitKey(a: Point, b: Point): string {

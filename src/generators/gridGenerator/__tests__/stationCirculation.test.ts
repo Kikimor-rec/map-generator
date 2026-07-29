@@ -77,6 +77,21 @@ describe('station circulation', () => {
     expectClosedRing(ring!)
   })
 
+  it('limits the closed ring to structural elbows instead of one bend per cell', () => {
+    const canvas = createStation('research')
+    const ring = carveStationCirculation(canvas, 0.5)[0]
+    let turns = 0
+    for (let index = 0; index < ring.points.length; index += 1) {
+      const previous = ring.points[(index - 1 + ring.points.length) % ring.points.length]
+      const current = ring.points[index]
+      const next = ring.points[(index + 1) % ring.points.length]
+      const incomingHorizontal = previous.y === current.y
+      const outgoingHorizontal = current.y === next.y
+      if (incomingHorizontal !== outgoingHorizontal) turns += 1
+    }
+    expect(turns).toBeLessThanOrEqual(16)
+  })
+
   it.each(['research', 'habitat'])(
     'never carves through the original VOID mask for %s',
     subtype => {
