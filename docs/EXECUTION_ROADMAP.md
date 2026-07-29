@@ -46,7 +46,7 @@ explicit importer.
 ## Phase 0 — Ground truth and guardrails
 
 **Outcome:** The team can change behavior without guessing whether it regressed.
-**Status:** Implemented locally; remote Ubuntu/Node 22 CI verification pending.
+**Status:** Complete (verified 2026-07-29 by Ubuntu/Node 22 CI).
 
 Scope:
 
@@ -72,7 +72,7 @@ Gate:
 - Determinism: `src/generators/__tests__/generationCorpus.test.ts`
 - Ownership: `docs/architecture/ACTIVE_GENERATOR_ADR.md`
 - CI configuration: `.github/workflows/check.yml`
-- Remote CI: successful Ubuntu/Node 22 workflow run pending after branch push
+- Remote CI: [workflow check #1](https://github.com/Kikimor-rec/map-generator/actions/runs/30482395857) — Success on Ubuntu with configured Node 22 for commit [`d0b43a2a02523e7c7777fef49d9ab3d532da7fed`](https://github.com/Kikimor-rec/map-generator/commit/d0b43a2a02523e7c7777fef49d9ab3d532da7fed); run 52 s, job `check` 47 s.
 
 ## Phase 1 — One production generation path
 
@@ -324,7 +324,6 @@ conflict, this roadmap and an accepted ADR take precedence.
 
 ## Current focus
 
-**Implemented:** Phase 0 — Ground truth and guardrails.
-**Verification pending:** Successful remote Ubuntu/Node 22 CI run.
-**Next after verification:** Phase 1 — One production generation path (not started).
+**Completed:** Phase 0 — Ground truth and guardrails (verified by Ubuntu/Node 22 CI).
+**Next:** Phase 1 — One production generation path (not started).
 **First external testing target:** Phase 5 — Canonical Blueprint Editor.
