@@ -1,5 +1,9 @@
 ﻿# План разработки: 2D-редактор sci-fi карт
 
+> **Execution precedence.** This document remains a detailed feature/status inventory.
+> `docs/EXECUTION_ROADMAP.md` is authoritative for execution order; conflicts resolve
+> in favor of the roadmap and accepted ADRs.
+
 ## Легенда статусов
 - ✅ Готово
 - 🔄 В процессе

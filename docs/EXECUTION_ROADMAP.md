@@ -46,6 +46,7 @@ explicit importer.
 ## Phase 0 — Ground truth and guardrails
 
 **Outcome:** The team can change behavior without guessing whether it regressed.
+**Status:** Complete (verified 2026-07-29).
 
 Scope:
 
@@ -64,6 +65,13 @@ Gate:
 - same seed/settings/version produces the same normalized hash;
 - corpus failures are machine-readable;
 - any generator behavior change produces a reviewable corpus diff.
+
+**Evidence:**
+
+- Local gate: `npm run check`
+- Determinism: `src/generators/__tests__/generationCorpus.test.ts`
+- Ownership: `docs/architecture/ACTIVE_GENERATOR_ADR.md`
+- CI: `.github/workflows/check.yml`
 
 ## Phase 1 — One production generation path
 
@@ -315,6 +323,6 @@ conflict, this roadmap and an accepted ADR take precedence.
 
 ## Current focus
 
-**Now:** Phase 0 — Ground truth and guardrails.
-**Next:** Phase 1 — One production generation path.
+**Completed:** Phase 0 — Ground truth and guardrails.
+**Next:** Phase 1 — One production generation path (not started).
 **First external testing target:** Phase 5 — Canonical Blueprint Editor.
