@@ -78,7 +78,7 @@ Gate:
 
 **Outcome:** Product UI and worker cannot silently select three different map
 architectures.
-**Status:** Complete locally (2026-07-30); remote CI pending.
+**Status:** Complete (2026-07-30); remote CI verified.
 
 Scope:
 
@@ -108,7 +108,7 @@ Gate:
   unless normalized, and never enters the UI or worker;
 - [x] the production boundary checker is part of `npm run check`;
 - [x] tests, lint, typecheck, boundary check, and build pass locally;
-- [ ] remote CI passes for the pushed Phase 1 commit.
+- [x] remote CI passes for the pushed Phase 1 implementation commit.
 
 **Local evidence (2026-07-30):**
 
@@ -138,7 +138,12 @@ therefore use the same collection boundary. The fixture remains covered by its
 3/3 direct Node run above; the canonical gate also runs the production boundary
 verifier.
 
-**Remote CI:** Pending. No Phase 1 branch run has been pushed or observed yet.
+**Remote CI (2026-07-30):** [GitHub Actions run
+#30501651989](https://github.com/Kikimor-rec/map-generator/actions/runs/30501651989)
+— Success in 55 s, triggered by a push on
+`codex/phase1-one-production-path`. This run verifies implementation commit
+[`1acc317763fb2a76a15f2915f1cddefc79fa1e14`](https://github.com/Kikimor-rec/map-generator/commit/1acc317763fb2a76a15f2915f1cddefc79fa1e14).
+A later docs-only commit or target-branch run may follow.
 
 ## Phase 2 — Canonical document and import boundary
 
@@ -371,8 +376,7 @@ conflict, this roadmap and an accepted ADR take precedence.
 ## Current focus
 
 **Completed:** Phase 0 — Ground truth and guardrails (verified by Ubuntu/Node 22 CI).
-**Completed locally:** Phase 1 — One production generation path (remote CI
-pending).
-**Next:** Push/verify Phase 1 CI when authorized, then Phase 2 — Canonical
-document and import boundary.
+**Completed:** Phase 1 — One production generation path (verified by remote CI
+for implementation commit `1acc317`).
+**Next:** Phase 2 — Canonical document and import boundary.
 **First external testing target:** Phase 5 — Canonical Blueprint Editor.
